@@ -27,6 +27,9 @@ import AdminUserManagement from '@/modules/admin/user-management/AdminUserManage
 import OCRWorkflow from '@/modules/ocr/OCRWorkflow'
 import AnswerKeyManager from '@/modules/answer-key/AnswerKeyManager'
 
+// Public answer key page - no login required
+import PublicAnswerKeyManager from '@/modules/answer-key/PublicAnswerKeyManager'
+
 
 export default function App() {
   const {
@@ -48,7 +51,7 @@ export default function App() {
    * LOGIN SUCCESS
    * ============================================================
    *
-   * Login.tsx already:
+   * Login.tsx:
    *
    * 1. Calls Flask backend
    * 2. Receives JWT
@@ -146,12 +149,22 @@ export default function App() {
    * ============================================================
    * LOGIN SCREEN
    * ============================================================
+   *
+   * The Login screen now has two paths:
+   *
+   * 1. Normal Sign In
+   * 2. Create Answer Key without login
    */
 
   if (screen === 'login') {
     return (
       <Login
         onSuccess={handleLoginSuccess}
+
+        // Opens Create Answer Key directly without login.
+        onCreateAnswerKey={() =>
+          navigate('public-answer-key-create')
+        }
 
         onForgotPassword={() =>
           navigate('forgot-password')
@@ -264,6 +277,37 @@ export default function App() {
 
   /*
    * ============================================================
+   * PUBLIC ANSWER KEY CREATION
+   * ============================================================
+   *
+   * IMPORTANT:
+   *
+   * This block is intentionally ABOVE the authentication guard.
+   *
+   * Therefore:
+   *
+   * - No login required
+   * - No signup required
+   * - No faculty/user object required
+   * - No JWT required at the frontend level
+   *
+   * The PublicAnswerKeyManager is responsible for creating
+   * the answer key through the public backend API.
+   */
+
+  if (screen === 'public-answer-key-create') {
+    return (
+      <PublicAnswerKeyManager
+        onBack={() =>
+          navigate('login')
+        }
+      />
+    )
+  }
+
+
+  /*
+   * ============================================================
    * AUTHENTICATION GUARD
    * ============================================================
    *
@@ -275,6 +319,12 @@ export default function App() {
     return (
       <Login
         onSuccess={handleLoginSuccess}
+
+        // Public Create Answer Key is also available
+        // if this fallback Login screen is rendered.
+        onCreateAnswerKey={() =>
+          navigate('public-answer-key-create')
+        }
 
         onForgotPassword={() =>
           navigate('forgot-password')
@@ -361,6 +411,10 @@ export default function App() {
    * ============================================================
    * ANSWER KEY MANAGEMENT
    * ============================================================
+   *
+   * This is the authenticated answer-key module.
+   *
+   * Keep this separate from the public answer-key module.
    */
 
   if (
@@ -387,7 +441,7 @@ export default function App() {
    * OCR WORKFLOW
    * ============================================================
    *
-   * OCRWorkflow requires `user`.
+   * OCRWorkflow requires an authenticated user.
    */
 
   if (screen === 'ocr-workflow') {
@@ -563,6 +617,11 @@ export default function App() {
   return (
     <Login
       onSuccess={handleLoginSuccess}
+
+      // Public Create Answer Key access.
+      onCreateAnswerKey={() =>
+        navigate('public-answer-key-create')
+      }
 
       onForgotPassword={() =>
         navigate('forgot-password')
