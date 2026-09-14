@@ -1,0 +1,1100 @@
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\index.ts ====================
+
+export { default as OCRWorkflow } from './OCRWorkflow'
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\OCRWorkflow.tsx ====================
+
+import { AppShell } from '@/layouts'
+import { useState } from 'react'
+import { Card, ArrowLeftIcon, ChevronRightIcon } from '@/components/common'
+import type { User, Screen, AnswerSheetOCR, QuestionMark } from '@/types'
+import { MOCK_SHEETS, MOCK_QUESTIONS } from '@/services/ocr/mockData'
+import { STEPS, Stepper } from './shared'
+import { useOCR } from '@/hooks'
+import StepUpload from './upload'
+import { StepProcessing, StepResults } from './extraction'
+import StepVerification from './verification'
+import StepMapping from './mapping'
+import { StepAIEvaluation, StepFacultyVerification } from '@/modules/evaluation'
+
+interface OCRWorkflowProps {
+  user: User
+  onNavigate: (s: Screen) => void
+  onLogout: () => void
+}
+
+export default function OCRWorkflow({ user, onNavigate, onLogout }: OCRWorkflowProps) {
+  const { step, setStep, completedSteps, advance, stepOrder, currentIdx, goToPrevious, goToNext } = useOCR('upload')
+  const [sheets, setSheets] = useState<AnswerSheetOCR[]>(MOCK_SHEETS)
+  const [questions, setQuestions] = useState<QuestionMark[]>(MOCK_QUESTIONS)
+  const [verifyingId, setVerifyingId] = useState<string | null>(null)
+
+  return (
+    <AppShell
+      user={{ name: user.name, role: user.role, email: user.email }}
+      onNavigate={onNavigate}
+      onLogout={onLogout}
+      activeSection="ocr"
+    >
+      <div className="max-w-5xl mx-auto space-y-6 animate-fade-in">
+        {/* Breadcrumb */}
+        <div className="flex items-center gap-2 text-sm text-[#94A3B8]">
+          <button onClick={() => onNavigate('dashboard-faculty')} className="hover:text-[#1B3A6B] transition-colors">
+            Faculty Dashboard
+          </button>
+          <ChevronRightIcon size={14} />
+          <span className="text-[#0F172A] font-medium">OCR Evaluation Workflow</span>
+          <ChevronRightIcon size={14} />
+          <span className="text-[#3B5DE8] font-medium">{STEPS.find(s => s.id === step)?.label}</span>
+        </div>
+
+        {/* Page header */}
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold text-[#0F172A] tracking-tight">Answer Sheet Evaluation</h1>
+            <p className="text-sm text-[#475569] mt-0.5">OCR-powered evaluation workflow with AI assistance and faculty verification.</p>
+          </div>
+          <button
+            onClick={() => onNavigate('dashboard-faculty')}
+            className="flex items-center gap-1.5 text-sm text-[#475569] hover:text-[#1B3A6B] font-medium transition-colors"
+          >
+            <ArrowLeftIcon size={14} /> Exit Workflow
+          </button>
+        </div>
+
+        {/* Stepper */}
+        <Card className="py-3 overflow-x-auto">
+          <Stepper current={step} completed={completedSteps} />
+        </Card>
+
+        {/* Step content */}
+        {step === 'upload' && (
+          <StepUpload onNext={() => advance('processing')} />
+        )}
+        {step === 'processing' && (
+          <StepProcessing onNext={() => advance('results')} />
+        )}
+        {step === 'results' && (
+          <StepResults
+            sheets={sheets}
+            onNext={() => advance('verification')}
+            onVerifySheet={id => { setVerifyingId(id); advance('verification') }}
+          />
+        )}
+        {step === 'verification' && (
+          <StepVerification
+            sheets={sheets}
+            onSheetsUpdate={setSheets}
+            onNext={() => advance('mapping')}
+            verifyingId={verifyingId}
+            onVerifySheet={setVerifyingId}
+          />
+        )}
+        {step === 'mapping' && (
+          <StepMapping
+            sheets={sheets}
+            onSheetsUpdate={setSheets}
+            onNext={() => advance('ai-evaluation')}
+          />
+        )}
+        {step === 'ai-evaluation' && (
+          <StepAIEvaluation
+            sheet={sheets[0]}
+            questions={questions}
+            onQuestionsUpdate={setQuestions}
+            onNext={() => advance('faculty-verification')}
+          />
+        )}
+        {step === 'faculty-verification' && (
+          <StepFacultyVerification
+            sheets={sheets}
+            questions={questions}
+            onSubmitToHOD={() => onNavigate('dashboard-faculty')}
+            onNavigate={onNavigate}
+          />
+        )}
+
+        {/* Step nav pills */}
+        <div className="flex items-center justify-between pt-2">
+          <button
+            onClick={goToPrevious}
+            disabled={currentIdx === 0}
+            className="flex items-center gap-1.5 text-sm text-[#475569] hover:text-[#1B3A6B] font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <ArrowLeftIcon size={14} /> Previous Step
+          </button>
+          <span className="text-xs text-[#94A3B8]">Step {currentIdx + 1} of {STEPS.length}</span>
+          <button
+            onClick={goToNext}
+            disabled={currentIdx === stepOrder.length - 1}
+            className="flex items-center gap-1.5 text-sm text-[#475569] hover:text-[#1B3A6B] font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Skip to Next <ChevronRightIcon size={14} />
+          </button>
+        </div>
+      </div>
+    </AppShell>
+  )
+}
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\extraction\index.ts ====================
+
+export { default as StepProcessing } from './StepProcessing'
+export { default as StepResults } from './StepResults'
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\extraction\StepProcessing.tsx ====================
+
+import { useState, useEffect } from 'react'
+import { Card, CardHeader, Alert, Spinner } from '@/components/common'
+import { AnswerSheetPreview } from '../shared'
+import { MOCK_SHEETS } from '@/services/ocr/mockData'
+
+export default function StepProcessing({ onNext }: { onNext: () => void }) {
+  const [processed, setProcessed] = useState(0)
+  const total = MOCK_SHEETS.length
+  const [currentSheet, setCurrentSheet] = useState(0)
+  const [done, setDone] = useState(false)
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setProcessed(prev => {
+        const next = prev + 1
+        setCurrentSheet(Math.min(next, total - 1))
+        if (next >= total) {
+          clearInterval(interval)
+          setDone(true)
+          setTimeout(onNext, 1200)
+        }
+        return next
+      })
+    }, 900)
+    return () => clearInterval(interval)
+  }, [])
+
+  const pct = Math.round((processed / total) * 100)
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <div className="flex flex-col items-center text-center py-6 gap-6">
+          {/* Animated icon */}
+          <div className="relative">
+            <div className="w-24 h-24 rounded-full border-4 border-[#EEF4FF] flex items-center justify-center">
+              <div className={`w-20 h-20 rounded-full border-4 border-t-[#1B3A6B] border-[#E2E8F0] ${done ? '' : 'animate-spin-slow'}`} />
+            </div>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-lg font-bold text-[#1B3A6B]">{pct}%</span>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-xl font-bold text-[#0F172A]">
+              {done ? 'OCR Complete!' : 'OCR Processing in Progress…'}
+            </h2>
+            <p className="text-sm text-[#475569] mt-1">
+              {done ? `All ${total} answer sheets processed successfully.` : `Extracting text from answer sheets using optical character recognition.`}
+            </p>
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full max-w-sm">
+            <div className="h-3 bg-[#E2E8F0] rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-700"
+                style={{ width: `${pct}%`, background: done ? '#059669' : '#1B3A6B' }}
+              />
+            </div>
+            <div className="flex justify-between mt-2 text-xs text-[#94A3B8]">
+              <span>{processed} of {total} sheets processed</span>
+              <span>{total - processed} remaining</span>
+            </div>
+          </div>
+
+          {/* Stats row */}
+          <div className="flex gap-6 text-center">
+            {[
+              { label: 'Sheets Queued', value: total },
+              { label: 'Processed', value: processed, color: '#059669' },
+              { label: 'Remaining', value: total - processed, color: '#D97706' },
+            ].map(stat => (
+              <div key={stat.label}>
+                <div className="text-2xl font-bold" style={{ color: stat.color ?? '#0F172A' }}>{stat.value}</div>
+                <div className="text-xs text-[#94A3B8] mt-0.5">{stat.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      {/* Current sheet preview */}
+      {!done && (
+        <Card>
+          <CardHeader title={`Processing Sheet ${currentSheet + 1} of ${total}`} subtitle={MOCK_SHEETS[currentSheet]?.filename} />
+          <div className="max-w-sm">
+            <AnswerSheetPreview sheet={MOCK_SHEETS[currentSheet]} />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {['Detecting fields…', 'Extracting text…', 'Confidence scoring…'].map((s, i) => (
+              <span key={i} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                i === 0 ? 'bg-[#1B3A6B] text-white' : 'bg-[#F1F5F9] text-[#94A3B8]'
+              }`}>
+                {i === 0 && <Spinner size="sm" color="white" />}
+                {s}
+              </span>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {done && (
+        <Alert variant="success" title="OCR Complete"
+          message={`${total} answer sheets have been processed. Proceed to review the extracted data.`} />
+      )}
+    </div>
+  )
+}
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\extraction\StepResults.tsx ====================
+
+import { Card, CardHeader, Button, ChevronRightIcon, Alert } from '@/components/common'
+import { ConfidenceBadge } from '../shared'
+import type { AnswerSheetOCR, OCRConfidence } from '@/types'
+
+export default function StepResults({ sheets, onNext, onVerifySheet }: {
+  sheets: AnswerSheetOCR[]
+  onNext: () => void
+  onVerifySheet: (id: string) => void
+}) {
+  const fields: (keyof AnswerSheetOCR)[] = ['studentName', 'rollNumber', 'cuid', 'courseName']
+  const lowCount = sheets.filter(s => s.overallConfidence === 'Low').length
+  const medCount = sheets.filter(s => s.overallConfidence === 'Medium').length
+
+  return (
+    <div className="space-y-6">
+      {/* Summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {[
+          { label: 'Total Sheets', value: sheets.length, color: '#1B3A6B', bg: '#EEF4FF' },
+          { label: 'High Confidence', value: sheets.filter(s => s.overallConfidence === 'High').length, color: '#059669', bg: '#D1FAE5' },
+          { label: 'Needs Review', value: medCount, color: '#D97706', bg: '#FEF3C7' },
+          { label: 'Low Confidence', value: lowCount, color: '#DC2626', bg: '#FEE2E2' },
+        ].map(stat => (
+          <Card key={stat.label} className="text-center py-4">
+            <div className="text-2xl font-bold" style={{ color: stat.color }}>{stat.value}</div>
+            <div className="text-xs text-[#94A3B8] mt-1 font-medium">{stat.label}</div>
+          </Card>
+        ))}
+      </div>
+
+      {(lowCount > 0 || medCount > 0) && (
+        <Alert variant="warning" title="Review Required"
+          message={`${lowCount + medCount} sheet${lowCount + medCount > 1 ? 's' : ''} have medium or low OCR confidence. Please verify and correct the extracted data before proceeding.`} />
+      )}
+
+      {/* Per-sheet results */}
+      <Card padding={false}>
+        <div className="p-5 border-b border-[#E2E8F0]">
+          <h3 className="text-base font-semibold text-[#0F172A]">Extracted Student Information</h3>
+          <p className="text-xs text-[#94A3B8] mt-0.5">Uncertain fields are highlighted. Click Verify to review and correct individual sheets.</p>
+        </div>
+        <div className="divide-y divide-[#F1F5F9]">
+          {sheets.map((sheet, idx) => (
+            <div key={sheet.id} className="p-5 hover:bg-[#F8FAFC] transition-colors">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-[#EEF4FF] flex items-center justify-center text-[#1B3A6B] text-xs font-bold shrink-0">
+                    {idx + 1}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-[#0F172A]">{sheet.studentName}</span>
+                      <ConfidenceBadge confidence={sheet.overallConfidence} />
+                      {sheet.verificationStatus === 'approved' && (
+                        <span className="text-xs font-semibold text-[#059669] bg-[#D1FAE5] px-2 py-0.5 rounded-full">Verified</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-[#94A3B8] mt-0.5">{sheet.filename}</div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onVerifySheet(sheet.id)}
+                  className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold text-[#1B3A6B] bg-[#EEF4FF] hover:bg-[#BACFFB] border border-[#BACFFB] transition-colors"
+                >
+                  {sheet.verificationStatus === 'approved' ? 'Re-verify' : 'Verify →'}
+                </button>
+              </div>
+
+              {/* Fields grid */}
+              <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { label: 'Program', val: sheet.program, field: 'program' },
+                  { label: 'Branch', val: sheet.branch, field: 'branch' },
+                  { label: 'Roll Number', val: sheet.rollNumber, field: 'rollNumber' },
+                  { label: 'CUID', val: sheet.cuid || '—', field: 'cuid' },
+                  { label: 'Course Name', val: sheet.courseName, field: 'courseName' },
+                  { label: 'Course Code', val: sheet.courseCode, field: 'courseCode' },
+                  { label: 'Father Name', val: sheet.fatherName, field: 'fatherName' },
+                ].map(f => {
+                  const conf = sheet.fieldConfidences[f.field] as OCRConfidence
+                  return (
+                    <div key={f.label} className={`rounded-lg px-2.5 py-2 border text-xs ${
+                      conf === 'Low' ? 'bg-[#FEF2F2] border-[#FECACA]' :
+                      conf === 'Medium' ? 'bg-[#FFFBEB] border-[#FDE68A]' :
+                      'bg-[#F8FAFC] border-[#E2E8F0]'
+                    }`}>
+                      <div className="text-[#94A3B8] mb-0.5">{f.label}</div>
+                      <div className={`font-semibold truncate ${
+                        conf === 'Low' ? 'text-[#DC2626]' :
+                        conf === 'Medium' ? 'text-[#D97706]' :
+                        'text-[#0F172A]'
+                      }`}>{f.val}</div>
+                      <ConfidenceBadge confidence={conf} />
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <div className="flex justify-end">
+        <Button variant="primary" size="lg" onClick={onNext} leftIcon={<ChevronRightIcon size={16} />}>
+          Proceed to Verification
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\mapping\index.ts ====================
+
+export { default } from './StepMapping'
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\mapping\StepMapping.tsx ====================
+
+import { useState } from 'react'
+import { Card, Button, Alert, ChevronRightIcon, Input, Modal, SearchIcon } from '@/components/common'
+import { MappingBadge } from '../shared'
+import { MOCK_STUDENT_DB } from '@/services/ocr/mockData'
+import type { AnswerSheetOCR, MappingStatus } from '@/types'
+
+export default function StepMapping({ sheets, onSheetsUpdate, onNext }: {
+  sheets: AnswerSheetOCR[]
+  onSheetsUpdate: (s: AnswerSheetOCR[]) => void
+  onNext: () => void
+}) {
+  const [manualMapping, setManualMapping] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [mappingSheet, setMappingSheet] = useState<AnswerSheetOCR | null>(null)
+
+  const filteredStudents = MOCK_STUDENT_DB.filter(s => {
+    const q = searchQuery.toLowerCase()
+    return !q || s.name.toLowerCase().includes(q) || s.rollNumber.toLowerCase().includes(q) || s.cuid.toLowerCase().includes(q)
+  })
+
+  const mappingConfidence: Record<MappingStatus, number> = {
+    'Mapped': 97,
+    'Needs Review': 71,
+    'Not Found': 0,
+  }
+
+  const handleManualMap = (sheet: AnswerSheetOCR, studentId: string) => {
+    const student = MOCK_STUDENT_DB.find(s => s.id === studentId)
+    if (!student) return
+    const updated = sheets.map(s => s.id === sheet.id ? { ...s, mappingStatus: 'Mapped' as const, mappedStudentId: studentId } : s)
+    onSheetsUpdate(updated)
+    setManualMapping(null)
+    setMappingSheet(null)
+  }
+
+  const allMapped = sheets.every(s => s.mappingStatus === 'Mapped')
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-3 gap-4">
+        {(['Mapped', 'Needs Review', 'Not Found'] as MappingStatus[]).map(status => {
+          const count = sheets.filter(s => s.mappingStatus === status).length
+          const colors = {
+            'Mapped': { bg: '#D1FAE5', text: '#059669' },
+            'Needs Review': { bg: '#FEF3C7', text: '#D97706' },
+            'Not Found': { bg: '#FEE2E2', text: '#DC2626' },
+          }[status]
+          return (
+            <Card key={status} className="text-center py-4">
+              <div className="text-2xl font-bold" style={{ color: colors.text }}>{count}</div>
+              <div className="text-xs text-[#94A3B8] mt-1"><MappingBadge status={status} /></div>
+            </Card>
+          )
+        })}
+      </div>
+
+      {sheets.some(s => s.mappingStatus !== 'Mapped') && (
+        <Alert variant="warning" title="Manual Mapping Required"
+          message="Some answer sheets could not be automatically matched to student records. Review and manually map them before proceeding." />
+      )}
+
+      <Card padding={false}>
+        <div className="p-5 border-b border-[#E2E8F0]">
+          <h3 className="text-base font-semibold text-[#0F172A]">Examination Record Mapping</h3>
+          <p className="text-xs text-[#94A3B8] mt-0.5">Extracted student data matched against the enrolled student database.</p>
+        </div>
+        <div className="divide-y divide-[#F1F5F9]">
+          {sheets.map(sheet => {
+            const matched = MOCK_STUDENT_DB.find(s => s.id === sheet.mappedStudentId)
+            const conf = mappingConfidence[sheet.mappingStatus]
+            return (
+              <div key={sheet.id} className="p-5">
+                <div className="flex items-start gap-4 flex-wrap">
+                  {/* Extracted */}
+                  <div className="flex-1 min-w-48">
+                    <div className="text-xs text-[#94A3B8] font-semibold uppercase tracking-wide mb-1">Extracted from Sheet</div>
+                    <div className="text-sm font-semibold text-[#0F172A]">{sheet.studentName}</div>
+                    <div className="text-xs text-[#475569]">{sheet.rollNumber} · {sheet.cuid || 'No CUID'}</div>
+                  </div>
+
+                  {/* Arrow */}
+                  <div className="flex items-center self-center text-[#94A3B8]">
+                    <ChevronRightIcon size={20} />
+                  </div>
+
+                  {/* Matched record */}
+                  <div className="flex-1 min-w-48">
+                    <div className="text-xs text-[#94A3B8] font-semibold uppercase tracking-wide mb-1">Matched Student Record</div>
+                    {matched ? (
+                      <>
+                        <div className="text-sm font-semibold text-[#0F172A]">{matched.name}</div>
+                        <div className="text-xs text-[#475569]">{matched.rollNumber} · {matched.cuid}</div>
+                      </>
+                    ) : (
+                      <div className="text-sm text-[#DC2626] font-medium">No match found</div>
+                    )}
+                  </div>
+
+                  {/* Status & confidence */}
+                  <div className="flex flex-col items-end gap-2 shrink-0">
+                    <MappingBadge status={sheet.mappingStatus} />
+                    {conf > 0 && (
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-16 h-1.5 bg-[#E2E8F0] rounded-full overflow-hidden">
+                          <div className="h-full rounded-full" style={{
+                            width: `${conf}%`,
+                            background: conf >= 90 ? '#059669' : conf >= 60 ? '#D97706' : '#DC2626'
+                          }} />
+                        </div>
+                        <span className="text-xs text-[#94A3B8] font-medium">{conf}%</span>
+                      </div>
+                    )}
+                    {sheet.mappingStatus !== 'Mapped' && (
+                      <button
+                        onClick={() => { setMappingSheet(sheet); setManualMapping(sheet.id); setSearchQuery('') }}
+                        className="px-2.5 py-1 rounded-md text-xs font-semibold text-[#1B3A6B] bg-[#EEF4FF] hover:bg-[#BACFFB] transition-colors"
+                      >
+                        Map Manually
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </Card>
+
+      <div className="flex justify-end">
+        <Button variant="primary" size="lg" onClick={onNext} disabled={!allMapped} leftIcon={<ChevronRightIcon size={16} />}>
+          {allMapped ? 'Proceed to AI Evaluation' : `${sheets.filter(s => s.mappingStatus !== 'Mapped').length} sheets unmapped`}
+        </Button>
+      </div>
+
+      {/* Manual mapping modal */}
+      <Modal open={manualMapping !== null} onClose={() => { setManualMapping(null); setMappingSheet(null) }} maxWidth="max-w-lg">
+        <div className="p-6 space-y-4">
+          <div>
+            <h3 className="text-lg font-bold text-[#0F172A]">Manual Student Mapping</h3>
+            <p className="text-sm text-[#475569] mt-0.5">
+              Search and select the correct student for: <strong>{mappingSheet?.studentName}</strong> ({mappingSheet?.rollNumber})
+            </p>
+          </div>
+          <Input
+            placeholder="Search by name, roll number, or CUID…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            leftIcon={<SearchIcon size={16} />}
+          />
+          <div className="max-h-64 overflow-y-auto space-y-2">
+            {filteredStudents.map(student => (
+              <button
+                key={student.id}
+                onClick={() => mappingSheet && handleManualMap(mappingSheet, student.id)}
+                className="w-full text-left p-3 rounded-lg border border-[#E2E8F0] hover:border-[#1B3A6B] hover:bg-[#EEF4FF] transition-all"
+              >
+                <div className="text-sm font-semibold text-[#0F172A]">{student.name}</div>
+                <div className="text-xs text-[#475569]">{student.rollNumber} · {student.cuid} · {student.program}</div>
+              </button>
+            ))}
+            {filteredStudents.length === 0 && (
+              <div className="text-center py-8 text-[#94A3B8] text-sm">No students found.</div>
+            )}
+          </div>
+          <Button variant="secondary" size="md" fullWidth onClick={() => { setManualMapping(null); setMappingSheet(null) }}>
+            Cancel
+          </Button>
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\shared\AnswerSheetPreview.tsx ====================
+
+import type { AnswerSheetOCR } from '@/types'
+
+export function AnswerSheetPreview({ sheet, highlight }: { sheet: AnswerSheetOCR; highlight?: string }) {
+  return (
+    <div className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden text-[11px] font-mono select-none shadow-sm">
+      {/* Sheet header */}
+      <div className="bg-[#0F2142] text-white px-4 py-2 flex items-center justify-between">
+        <span className="font-bold text-xs tracking-wide">COER UNIVERSITY</span>
+        <span className="text-blue-300 text-[10px]">Answer Book</span>
+      </div>
+      <div className="px-4 pt-3 pb-2 border-b border-dashed border-[#E2E8F0] bg-[#F8FAFC] space-y-2">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+          {[
+            { label: 'Program', val: sheet.program, field: 'program' },
+            { label: 'Branch', val: sheet.branch, field: 'branch' },
+            { label: 'Student Name', val: sheet.studentName, field: 'studentName' },
+            { label: 'Father Name', val: sheet.fatherName, field: 'fatherName' },
+            { label: 'Roll No.', val: sheet.rollNumber, field: 'rollNumber' },
+            { label: 'CUID', val: sheet.cuid || '—', field: 'cuid' },
+            { label: 'Course', val: sheet.courseName, field: 'courseName' },
+            { label: 'Code', val: sheet.courseCode, field: 'courseCode' },
+          ].map(f => (
+            <div key={f.label} className={`${highlight === f.field ? 'bg-amber-100 -mx-1 px-1 rounded' : ''}`}>
+              <span className="text-[#94A3B8]">{f.label}: </span>
+              <span className={`font-semibold ${
+                sheet.fieldConfidences[f.field] === 'Low' ? 'text-[#DC2626] underline decoration-dotted' :
+                sheet.fieldConfidences[f.field] === 'Medium' ? 'text-[#D97706]' : 'text-[#0F172A]'
+              }`}>{f.val}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      {/* Fake answer lines */}
+      <div className="px-4 py-3 space-y-2">
+        <div className="text-[#94A3B8] text-[10px] mb-1">Q1. Explain the time complexity of QuickSort…</div>
+        {[90, 75, 85, 60, 80, 70, 65].map((w, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className="h-px flex-1 bg-[#E2E8F0]" />
+            <div className="h-2 rounded-sm bg-[#94A3B8]/40" style={{ width: `${w}%`, maxWidth: 180 }} />
+          </div>
+        ))}
+        <div className="text-[#94A3B8] text-[10px] mt-2">Q2. Prove that P ≠ NP using reduction…</div>
+        {[80, 55, 90, 70].map((w, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className="h-px flex-1 bg-[#E2E8F0]" />
+            <div className="h-2 rounded-sm bg-[#94A3B8]/40" style={{ width: `${w}%`, maxWidth: 180 }} />
+          </div>
+        ))}
+      </div>
+      <div className="px-4 pb-3 text-right text-[10px] text-[#94A3B8] border-t border-dashed border-[#E2E8F0] pt-2">
+        Page 1 of 8 · {sheet.filename}
+      </div>
+    </div>
+  )
+}
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\shared\badges.tsx ====================
+
+import type { OCRConfidence, MappingStatus } from '@/types'
+
+export function ConfidenceBadge({ confidence }: { confidence: OCRConfidence }) {
+  const cfg = {
+    High: 'bg-[#D1FAE5] text-[#065F46] border-[#A7F3D0]',
+    Medium: 'bg-[#FEF3C7] text-[#92400E] border-[#FDE68A]',
+    Low: 'bg-[#FEE2E2] text-[#991B1B] border-[#FECACA]',
+  }[confidence]
+  const icon = { High: '●', Medium: '◐', Low: '○' }[confidence]
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${cfg}`}>
+      <span className="text-[10px]">{icon}</span> {confidence}
+    </span>
+  )
+}
+
+export function MappingBadge({ status }: { status: MappingStatus }) {
+  const cfg = {
+    'Mapped': 'bg-[#D1FAE5] text-[#065F46]',
+    'Needs Review': 'bg-[#FEF3C7] text-[#92400E]',
+    'Not Found': 'bg-[#FEE2E2] text-[#991B1B]',
+  }[status]
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${cfg}`}>{status}</span>
+}
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\shared\index.ts ====================
+
+export { STEPS } from './steps'
+export type { OCRStep } from './steps'
+export { ConfidenceBadge, MappingBadge } from './badges'
+export { Stepper } from './Stepper'
+export { AnswerSheetPreview } from './AnswerSheetPreview'
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\shared\Stepper.tsx ====================
+
+import { CheckIcon } from '@/components/common'
+import { STEPS } from './steps'
+import type { OCRStep } from './steps'
+
+// ─── Stepper ──────────────────────────────────────────────────────────────────
+export function Stepper({ current, completed }: { current: OCRStep; completed: OCRStep[] }) {
+  const currentIdx = STEPS.findIndex(s => s.id === current)
+  return (
+    <div className="w-full overflow-x-auto">
+      <div className="flex items-center min-w-max px-1 py-3">
+        {STEPS.map((step, i) => {
+          const isCompleted = completed.includes(step.id)
+          const isCurrent = step.id === current
+          const isPast = i < currentIdx
+          return (
+            <div key={step.id} className="flex items-center">
+              <div className="flex flex-col items-center gap-1">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${
+                  isCompleted || isPast
+                    ? 'bg-[#059669] border-[#059669] text-white'
+                    : isCurrent
+                      ? 'bg-[#1B3A6B] border-[#1B3A6B] text-white shadow-lg shadow-[#1B3A6B]/30'
+                      : 'bg-white border-[#E2E8F0] text-[#94A3B8]'
+                }`}>
+                  {(isCompleted || isPast) ? <CheckIcon size={14} /> : <span>{i + 1}</span>}
+                </div>
+                <span className={`text-[10px] font-medium whitespace-nowrap max-w-[64px] text-center leading-tight ${
+                  isCurrent ? 'text-[#1B3A6B]' : (isCompleted || isPast) ? 'text-[#059669]' : 'text-[#94A3B8]'
+                }`}>
+                  {step.short}
+                </span>
+              </div>
+              {i < STEPS.length - 1 && (
+                <div className={`h-0.5 w-8 sm:w-12 mx-1 mb-4 rounded-full transition-all ${
+                  i < currentIdx ? 'bg-[#059669]' : 'bg-[#E2E8F0]'
+                }`} />
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\shared\steps.ts ====================
+
+export type OCRStep = 'upload' | 'processing' | 'results' | 'verification' | 'mapping' | 'ai-evaluation' | 'faculty-verification'
+
+export const STEPS: { id: OCRStep; label: string; short: string }[] = [
+  { id: 'upload', label: 'Upload Answer Sheets', short: 'Upload' },
+  { id: 'processing', label: 'OCR Processing', short: 'OCR' },
+  { id: 'results', label: 'OCR Results', short: 'Results' },
+  { id: 'verification', label: 'Student Verification', short: 'Verify' },
+  { id: 'mapping', label: 'Student Mapping', short: 'Mapping' },
+  { id: 'ai-evaluation', label: 'AI Evaluation', short: 'AI Eval' },
+  { id: 'faculty-verification', label: 'Faculty Verification', short: 'Submit' },
+]
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\upload\index.ts ====================
+
+export { default } from './StepUpload'
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\upload\StepUpload.tsx ====================
+
+import { useState, useRef, useCallback } from 'react'
+import { Card, CardHeader, Button, Alert, SectionLabel, Spinner, AlertCircleIcon, CheckCircleIcon } from '@/components/common'
+import { MOCK_EXAMINATIONS } from '@/services/ocr/mockData'
+
+// ─── Step 1: Upload ───────────────────────────────────────────────────────────
+interface UploadFile { name: string; size: string; progress: number; status: 'queued' | 'uploading' | 'done' | 'error' }
+
+export default function StepUpload({ onNext }: { onNext: () => void }) {
+  const [selectedExam, setSelectedExam] = useState('')
+  const [files, setFiles] = useState<UploadFile[]>([])
+  const [dragging, setDragging] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const addFiles = (names: string[]) => {
+    const newFiles = names.map(name => ({
+      name,
+      size: `${(Math.random() * 3 + 0.5).toFixed(1)} MB`,
+      progress: 0,
+      status: 'queued' as const,
+    }))
+    setFiles(prev => [...prev, ...newFiles])
+  }
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    const dropped = Array.from(e.dataTransfer.files).map(f => f.name)
+    if (dropped.length) addFiles(dropped)
+  }, [])
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files || []).map(f => f.name)
+    if (picked.length) addFiles(picked)
+    else addFiles(['answersheet_2021UCS042.pdf', 'answersheet_2021UCS055.pdf', 'answersheet_2021UCS067.pdf', 'answersheet_unknown.pdf'])
+    e.target.value = ''
+  }
+
+  const handleDemoLoad = () => {
+    addFiles(['answersheet_2021UCS042.pdf', 'answersheet_2021UCS055.pdf', 'answersheet_2021UCS067.pdf', 'answersheet_unknown.pdf'])
+  }
+
+  const startUpload = () => {
+    if (!selectedExam || files.length === 0) return
+    setUploading(true)
+    let i = 0
+    const tick = setInterval(() => {
+      setFiles(prev => prev.map((f, idx) => {
+        if (f.status === 'done') return f
+        if (idx === i) {
+          if (f.progress >= 100) { i++; return { ...f, progress: 100, status: 'done' } }
+          return { ...f, progress: Math.min(f.progress + 25, 100), status: 'uploading' }
+        }
+        return f
+      }))
+      setFiles(prev => {
+        if (prev.every(f => f.status === 'done')) {
+          clearInterval(tick)
+          setTimeout(onNext, 600)
+        }
+        return prev
+      })
+    }, 300)
+  }
+
+  const allDone = files.length > 0 && files.every(f => f.status === 'done')
+  const canStart = selectedExam && files.length > 0 && !uploading
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader title="Select Examination" subtitle="Choose the examination this batch of answer sheets belongs to" />
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium text-[#0F172A]">Examination <span className="text-[#DC2626]">*</span></label>
+          <select
+            value={selectedExam}
+            onChange={e => setSelectedExam(e.target.value)}
+            className="w-full h-10 px-3 rounded-lg border border-[#E2E8F0] text-sm text-[#0F172A] bg-white focus:border-[#3B5DE8] focus:ring-2 focus:ring-[#3B5DE8]/20 outline-none"
+          >
+            <option value="">— Select an examination —</option>
+            {MOCK_EXAMINATIONS.map(e => (
+              <option key={e.id} value={e.id}>
+                {e.code} — {e.name} (Sem {e.semester} · {e.date})
+              </option>
+            ))}
+          </select>
+          {selectedExam && (() => {
+            const exam = MOCK_EXAMINATIONS.find(e => e.id === selectedExam)!
+            return (
+              <div className="flex flex-wrap gap-4 mt-3 p-3 rounded-lg bg-[#EEF4FF] border border-[#BACFFB] text-xs text-[#1B3A6B]">
+                <span><strong>Department:</strong> {exam.department}</span>
+                <span><strong>Total Students:</strong> {exam.totalStudents}</span>
+                <span><strong>Exam Date:</strong> {exam.date}</span>
+                <span className={`font-semibold ${exam.status === 'Active' ? 'text-[#059669]' : 'text-[#D97706]'}`}>{exam.status}</span>
+              </div>
+            )
+          })()}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader title="Upload Answer Sheets" subtitle="PDF or image files (JPG, PNG). Max 50 MB per file." />
+
+        {/* Drop zone */}
+        <div
+          onDragOver={e => { e.preventDefault(); setDragging(true) }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current?.click()}
+          className={`relative border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all ${
+            dragging ? 'border-[#3B5DE8] bg-[#EEF4FF]' : 'border-[#E2E8F0] hover:border-[#93A9F9] hover:bg-[#F8FAFC]'
+          }`}
+        >
+          <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={handleFileInput} />
+          <div className="flex flex-col items-center gap-3">
+            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all ${dragging ? 'bg-[#3B5DE8] text-white' : 'bg-[#EEF4FF] text-[#3B5DE8]'}`}>
+              <UploadCloudIcon size={28} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-[#0F172A]">
+                {dragging ? 'Drop files here' : 'Drag & drop answer sheets'}
+              </p>
+              <p className="text-xs text-[#94A3B8] mt-1">or click to browse · PDF, JPG, PNG supported</p>
+            </div>
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); handleDemoLoad() }}
+              className="text-xs text-[#3B5DE8] hover:underline font-medium"
+            >
+              Load 4 demo sheets
+            </button>
+          </div>
+        </div>
+
+        {/* File queue */}
+        {files.length > 0 && (
+          <div className="mt-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-[#0F172A]">{files.length} file{files.length > 1 ? 's' : ''} queued</p>
+              {!uploading && <button onClick={() => setFiles([])} className="text-xs text-[#94A3B8] hover:text-[#DC2626] transition-colors">Clear all</button>}
+            </div>
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {files.map((f, i) => (
+                <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                  <div className="w-8 h-8 rounded-lg bg-[#EEF4FF] flex items-center justify-center shrink-0">
+                    <FileIcon size={16} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-[#0F172A] truncate">{f.name}</span>
+                      <span className="text-xs text-[#94A3B8] shrink-0">{f.size}</span>
+                    </div>
+                    {f.status !== 'queued' && (
+                      <div className="mt-1.5 flex items-center gap-2">
+                        <div className="flex-1 h-1 bg-[#E2E8F0] rounded-full overflow-hidden">
+                          <div className="h-full bg-[#1B3A6B] rounded-full transition-all duration-300" style={{ width: `${f.progress}%` }} />
+                        </div>
+                        <span className="text-[10px] text-[#94A3B8] shrink-0">{f.progress}%</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="shrink-0">
+                    {f.status === 'queued' && <span className="text-[10px] text-[#94A3B8] font-medium uppercase">Queued</span>}
+                    {f.status === 'uploading' && <Spinner size="sm" color="navy" />}
+                    {f.status === 'done' && <CheckCircleIcon size={16} />}
+                    {f.status === 'error' && <AlertCircleIcon size={16} />}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      <div className="flex gap-3 justify-end">
+        <Button variant="primary" size="lg" onClick={startUpload} disabled={!canStart} loading={uploading && !allDone}>
+          {uploading ? 'Uploading…' : 'Upload & Start OCR'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Step 2: OCR Processing ───────────────────────────────────────────────────
+
+// ─── Extra icons ──────────────────────────────────────────────────────────────
+function UploadCloudIcon({ size = 24 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="16 16 12 12 8 16" />
+      <line x1="12" y1="12" x2="12" y2="21" />
+      <path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3" />
+    </svg>
+  )
+}
+
+function FileIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <polyline points="10 9 9 9 8 9" />
+    </svg>
+  )
+}
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\verification\index.ts ====================
+
+export { default } from './StepVerification'
+
+
+==================== C:\Users\COER\Desktop\Frontend\exam-frontend\src\modules\ocr\verification\StepVerification.tsx ====================
+
+import { useState, useEffect } from 'react'
+import { Card, Button, Alert, AlertTriangleIcon, CheckIcon, XIcon } from '@/components/common'
+import { ConfidenceBadge, AnswerSheetPreview } from '../shared'
+import type { AnswerSheetOCR, OCRConfidence } from '@/types'
+
+export default function StepVerification({ sheets, onSheetsUpdate, onNext, verifyingId, onVerifySheet }: {
+  sheets: AnswerSheetOCR[]
+  onSheetsUpdate: (sheets: AnswerSheetOCR[]) => void
+  onNext: () => void
+  verifyingId: string | null
+  onVerifySheet: (id: string | null) => void
+}) {
+  const [editFields, setEditFields] = useState<Partial<AnswerSheetOCR>>({})
+  const [activeSheet, setActiveSheet] = useState<AnswerSheetOCR | null>(
+    verifyingId ? sheets.find(s => s.id === verifyingId) ?? sheets[0] : sheets[0]
+  )
+  const [highlightField, setHighlightField] = useState<string | undefined>()
+
+  useEffect(() => {
+    if (verifyingId) {
+      const s = sheets.find(s => s.id === verifyingId)
+      if (s) { setActiveSheet(s); setEditFields({}) }
+    }
+  }, [verifyingId])
+
+  if (!activeSheet) return null
+
+  const merged = { ...activeSheet, ...editFields }
+
+  const fieldDefs = [
+    { key: 'program', label: 'Program', placeholder: 'e.g. B.Tech' },
+    { key: 'branch', label: 'Branch / Specialization', placeholder: 'e.g. Computer Science & Engineering' },
+    { key: 'studentName', label: 'Student Name', placeholder: 'Full name as on records' },
+    { key: 'fatherName', label: "Father's Name", placeholder: "Father's full name" },
+    { key: 'rollNumber', label: 'University Roll Number', placeholder: 'e.g. 2021UCS042' },
+    { key: 'cuid', label: 'CUID', placeholder: 'e.g. CU21001234' },
+    { key: 'courseName', label: 'Course Name', placeholder: 'Full course name' },
+    { key: 'courseCode', label: 'Course Code', placeholder: 'e.g. CS401' },
+  ]
+
+  const handleApprove = () => {
+    const updated = sheets.map(s => s.id === activeSheet.id ? { ...s, ...editFields, verificationStatus: 'approved' as const } : s)
+    onSheetsUpdate(updated)
+    const next = sheets.find(s => s.id !== activeSheet.id && s.verificationStatus !== 'approved')
+    if (next) { setActiveSheet(next); setEditFields({}) }
+    else onNext()
+  }
+
+  const handleReject = () => {
+    const updated = sheets.map(s => s.id === activeSheet.id ? { ...s, verificationStatus: 'rejected' as const } : s)
+    onSheetsUpdate(updated)
+    const next = sheets.find(s => s.id !== activeSheet.id && s.verificationStatus !== 'approved')
+    if (next) { setActiveSheet(next); setEditFields({}) }
+  }
+
+  const pendingCount = sheets.filter(s => s.verificationStatus === 'pending').length
+
+  return (
+    <div className="space-y-4">
+      {/* Sheet selector */}
+      <Card className="py-3">
+        <div className="flex flex-wrap gap-2 items-center">
+          <span className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wide mr-1">Sheets:</span>
+          {sheets.map(s => (
+            <button
+              key={s.id}
+              onClick={() => { setActiveSheet(s); setEditFields({}); setHighlightField(undefined) }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                s.id === activeSheet.id ? 'bg-[#1B3A6B] border-[#1B3A6B] text-white' :
+                s.verificationStatus === 'approved' ? 'bg-[#D1FAE5] border-[#A7F3D0] text-[#065F46]' :
+                s.verificationStatus === 'rejected' ? 'bg-[#FEE2E2] border-[#FECACA] text-[#991B1B]' :
+                'bg-white border-[#E2E8F0] text-[#475569] hover:border-[#1B3A6B]'
+              }`}
+            >
+              {s.rollNumber}
+              {s.verificationStatus === 'approved' && ' ✓'}
+              {s.verificationStatus === 'rejected' && ' ✗'}
+            </button>
+          ))}
+          {pendingCount === 0 && (
+            <span className="ml-2 text-xs font-semibold text-[#059669]">All sheets reviewed!</span>
+          )}
+        </div>
+      </Card>
+
+      {/* Main verification layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Left: Answer sheet image */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-[#0F172A]">Answer Sheet Preview</h3>
+            <ConfidenceBadge confidence={activeSheet.overallConfidence} />
+          </div>
+          <AnswerSheetPreview sheet={merged as AnswerSheetOCR} highlight={highlightField} />
+          <Alert variant="info"
+            message={`OCR overall confidence: ${activeSheet.overallConfidence}. Fields highlighted in red/amber need review.`} />
+        </div>
+
+        {/* Right: Extracted data form */}
+        <div className="space-y-4">
+          <h3 className="text-sm font-semibold text-[#0F172A]">Extracted Data — Review & Correct</h3>
+          <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
+            {fieldDefs.map(f => {
+              const conf = activeSheet.fieldConfidences[f.key] as OCRConfidence
+              const val = (merged as any)[f.key] || ''
+              const isEdited = editFields[f.key as keyof AnswerSheetOCR] !== undefined
+              return (
+                <div key={f.key}
+                  className={`relative rounded-lg border p-3 transition-all ${
+                    conf === 'Low' ? 'border-[#FECACA] bg-[#FEF2F2]' :
+                    conf === 'Medium' ? 'border-[#FDE68A] bg-[#FFFBEB]' :
+                    'border-[#E2E8F0] bg-white'
+                  }`}
+                  onMouseEnter={() => setHighlightField(f.key)}
+                  onMouseLeave={() => setHighlightField(undefined)}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-[#475569] uppercase tracking-wide">{f.label}</label>
+                    <div className="flex items-center gap-1.5">
+                      {isEdited && <span className="text-[10px] font-semibold text-[#3B5DE8] uppercase">Edited</span>}
+                      <ConfidenceBadge confidence={conf} />
+                    </div>
+                  </div>
+                  <input
+                    value={val}
+                    onChange={e => setEditFields(prev => ({ ...prev, [f.key]: e.target.value }))}
+                    placeholder={f.placeholder}
+                    className="w-full text-sm text-[#0F172A] bg-transparent outline-none border-b border-dashed border-[#CBD5E1] pb-0.5 focus:border-[#3B5DE8]"
+                  />
+                  {conf === 'Low' && (
+                    <p className="text-[10px] text-[#DC2626] mt-1 flex items-center gap-1">
+                      <AlertTriangleIcon size={10} /> Low confidence — please verify manually
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-3 pt-2">
+            <Button variant="danger" size="md" fullWidth onClick={handleReject} leftIcon={<XIcon size={14} />}>
+              Reject Sheet
+            </Button>
+            <Button variant="success" size="md" fullWidth onClick={handleApprove} leftIcon={<CheckIcon size={14} />}>
+              Approve & Continue
+            </Button>
+          </div>
+          {pendingCount === 0 && (
+            <Button variant="primary" size="md" fullWidth onClick={onNext}>
+              All Verified — Proceed to Student Mapping →
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Step 5: Student Mapping ──────────────────────────────────────────────────
+

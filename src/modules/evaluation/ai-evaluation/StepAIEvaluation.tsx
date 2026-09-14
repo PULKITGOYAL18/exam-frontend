@@ -1,160 +1,160 @@
 import { useState } from 'react'
-import { Card, Button, Alert, CheckIcon, ChevronRightIcon, EditIcon, XIcon } from '@/components/common'
-import type { QuestionMark, AnswerSheetOCR } from '@/types'
-import { AnswerSheetPreview, ConfidenceBadge } from '@/modules/ocr/shared'
+import { Card, Button, CheckIcon } from '@/components/common'
+import { useOCRStore } from '@/stores/ocrStore'
 
-export default function StepAIEvaluation({ sheet, questions, onQuestionsUpdate, onNext }: {
-  sheet: AnswerSheetOCR
-  questions: QuestionMark[]
-  onQuestionsUpdate: (q: QuestionMark[]) => void
-  onNext: () => void
-}) {
-  const [editingQ, setEditingQ] = useState<number | null>(null)
+export default function StepAIEvaluation({ onNext }: { onNext: () => void }) {
+  const { results } = useOCRStore()
+  const [overrides, setOverrides] = useState<Record<string, number>>({})
   const [editValue, setEditValue] = useState('')
+  const [editingKey, setEditingKey] = useState<string | null>(null)
 
-  const totalMax = questions.reduce((sum, q) => sum + q.maxMarks, 0)
-  const totalAI = questions.reduce((sum, q) => sum + q.aiMarks, 0)
-  const totalFaculty = questions.reduce((sum, q) => sum + (q.facultyMarks ?? q.aiMarks), 0)
-  const overrideCount = questions.filter(q => q.facultyMarks !== null).length
+  if (!results || results.length === 0) {
+    return (
+      <Card className="text-center py-12">
+        <p className="text-[#94A3B8]">No results available</p>
+      </Card>
+    )
+  }
 
-  const handleEditSave = (qNo: number) => {
+  const getQData = (result: any, q: any) => {
+    const verified = (result.verified || []).find((v: any) => v.question_number === q.question_number)
+    const grade = (result.grades || []).find((g: any) => g.question_number === q.question_number)
+    const aiMarks = verified?.verified_marks ?? grade?.marks_awarded ?? 0
+    const confidence = verified?.confidence ?? grade?.confidence ?? 0
+    const key = `${result.roll || result.student_name}|${q.question_number}`
+    return {
+      aiMarks,
+      confidence,
+      key,
+      maxMarks: q.max_marks || 10,
+      studentAnswer: q.student_answer || 'Not attempted',
+      isLow: confidence < 0.7,
+    }
+  }
+
+  const effectiveMark = (d: any) => overrides[d.key] ?? d.aiMarks
+
+  const studentTotal = (result: any) =>
+    (result.questions || []).reduce((sum: number, q: any) => sum + effectiveMark(getQData(result, q)), 0)
+
+  const studentMax = (result: any) =>
+    (result.questions || []).reduce((s: number, q: any) => s + (q.max_marks || 10), 0)
+
+  const saveOverride = (key: string, maxMarks: number) => {
     const val = parseFloat(editValue)
-    const q = questions.find(q => q.questionNo === qNo)
-    if (!q || isNaN(val) || val < 0 || val > q.maxMarks) return
-    onQuestionsUpdate(questions.map(q => q.questionNo === qNo ? { ...q, facultyMarks: val } : q))
-    setEditingQ(null)
+    if (isNaN(val) || val < 0 || val > maxMarks) return
+    setOverrides(prev => ({ ...prev, [key]: val }))
+    setEditingKey(null)
+  }
+
+  const confBadge = (c: number) => {
+    const level = c >= 0.8 ? 'High' : c >= 0.7 ? 'Medium' : 'Low'
+    const color = level === 'High' ? '#059669' : level === 'Medium' ? '#D97706' : '#DC2626'
+    const bg = level === 'High' ? '#D1FAE5' : level === 'Medium' ? '#FEF3C7' : '#FEE2E2'
+    return (
+      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ color, background: bg }}>
+        {level} ({c.toFixed(2)})
+      </span>
+    )
   }
 
   return (
     <div className="space-y-6">
-      {/* Header stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {[
-          { label: 'Total Questions', value: questions.length, sub: '', color: '#1B3A6B' },
-          { label: 'AI Total Marks', value: `${totalAI}/${totalMax}`, sub: `${Math.round(totalAI / totalMax * 100)}%`, color: '#3B5DE8' },
-          { label: 'Faculty Marks', value: `${totalFaculty}/${totalMax}`, sub: overrideCount > 0 ? `${overrideCount} overrides` : 'AI marks accepted', color: '#059669' },
-          { label: 'Overridden', value: overrideCount, sub: 'by faculty', color: '#D97706' },
-        ].map(s => (
-          <Card key={s.label} className="py-4 text-center">
-            <div className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</div>
-            {s.sub && <div className="text-[10px] text-[#94A3B8] mt-0.5">{s.sub}</div>}
-            <div className="text-xs text-[#94A3B8] mt-1 font-medium">{s.label}</div>
-          </Card>
-        ))}
+      <div>
+        <h2 className="text-xl font-bold text-[#0F172A]">🤖 AI Evaluation — All Students</h2>
+        <p className="text-sm text-[#475569] mt-0.5">
+          Low-confidence answers are flagged for manual grading with the student's answer shown.
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* Answer sheet preview */}
-        <div className="lg:col-span-2 space-y-3">
-          <h3 className="text-sm font-semibold text-[#0F172A]">Answer Sheet</h3>
-          <div className="p-2 bg-[#F8FAFC] rounded-xl border border-[#E2E8F0]">
-            <div className="text-xs text-[#94A3B8] px-1 pb-1 font-medium">{sheet.studentName} · {sheet.rollNumber}</div>
-            <AnswerSheetPreview sheet={sheet} />
-          </div>
-          <Alert variant="info"
-            message="AI has evaluated all answers. You may override any mark. Modified marks will be highlighted." />
-        </div>
+      {results.map((result: any, sIdx: number) => {
+        const total = studentTotal(result)
+        const maxTotal = studentMax(result)
+        return (
+          <Card key={sIdx} className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-[#0F172A]">
+                {result.student_name} ({result.roll})
+              </h3>
+              <span className="text-lg font-bold text-[#1B3A6B]">
+                {total.toFixed(1)}/{maxTotal}
+              </span>
+            </div>
 
-        {/* Question-wise marks */}
-        <div className="lg:col-span-3">
-          <h3 className="text-sm font-semibold text-[#0F172A] mb-3">Question-wise AI Evaluation</h3>
-          <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
-            {questions.map(q => {
-              const effectiveMark = q.facultyMarks ?? q.aiMarks
-              const isEditing = editingQ === q.questionNo
-              const isOverridden = q.facultyMarks !== null
-
-              return (
-                <div key={q.questionNo} className={`rounded-xl border p-4 transition-all ${
-                  isOverridden ? 'border-[#BACFFB] bg-[#EEF4FF]' :
-                  q.confidence === 'Low' ? 'border-[#FECACA] bg-[#FEF2F2]' :
-                  'border-[#E2E8F0] bg-white'
-                }`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs font-bold text-[#1B3A6B] bg-[#EEF4FF] px-2 py-0.5 rounded-md">Q{q.questionNo}</span>
-                        <ConfidenceBadge confidence={q.confidence} />
-                        {isOverridden && (
-                          <span className="text-[10px] font-bold text-[#3B5DE8] uppercase tracking-wide">Faculty Override</span>
-                        )}
-                        {q.confidence === 'Low' && (
-                          <span className="text-[10px] font-semibold text-[#DC2626]">⚠ Review recommended</span>
+            <div className="space-y-2">
+              {(result.questions || []).map((q: any, qIdx: number) => {
+                const d = getQData(result, q)
+                const isEditing = editingKey === d.key
+                return (
+                  <div key={qIdx} className={`rounded-lg border p-3 ${d.isLow ? 'border-[#FECACA] bg-[#FEF2F2]' : 'border-[#E2E8F0] bg-white'}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <span className="text-xs font-bold text-[#1B3A6B] bg-[#EEF4FF] px-2 py-0.5 rounded-md shrink-0">
+                          {q.question_number}
+                        </span>
+                        {confBadge(d.confidence)}
+                        {d.isLow && (
+                          <span className="text-[10px] font-semibold text-[#DC2626]">⚠ Manual grading needed</span>
                         )}
                       </div>
-                      <p className="text-xs text-[#475569] mt-2 leading-relaxed">{q.aiComment}</p>
-                    </div>
-
-                    {/* Marks */}
-                    <div className="shrink-0 text-right">
-                      <div className="text-xs text-[#94A3B8] mb-1">Max: {q.maxMarks}</div>
-                      {isEditing ? (
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="number"
-                            min={0}
-                            max={q.maxMarks}
-                            step={0.5}
-                            value={editValue}
-                            onChange={e => setEditValue(e.target.value)}
-                            className="w-14 h-7 text-center text-sm border border-[#3B5DE8] rounded-md outline-none"
-                            autoFocus
-                            onKeyDown={e => { if (e.key === 'Enter') handleEditSave(q.questionNo); if (e.key === 'Escape') setEditingQ(null) }}
-                          />
-                          <button onClick={() => handleEditSave(q.questionNo)} className="text-[#059669] hover:text-[#047857]"><CheckIcon size={14} /></button>
-                          <button onClick={() => setEditingQ(null)} className="text-[#94A3B8] hover:text-[#DC2626]"><XIcon size={14} /></button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <div className="text-right">
-                            <div className="text-xs text-[#94A3B8]">AI: {q.aiMarks}</div>
-                            <div className={`text-lg font-bold ${isOverridden ? 'text-[#1B3A6B]' : 'text-[#0F172A]'}`}>
-                              {effectiveMark}
-                            </div>
+                      <div className="shrink-0 text-right">
+                        {isEditing ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min={0}
+                              max={d.maxMarks}
+                              step={0.5}
+                              value={editValue}
+                              onChange={e => setEditValue(e.target.value)}
+                              className="w-16 h-7 text-center text-sm border border-[#3B5DE8] rounded-md outline-none"
+                              autoFocus
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') saveOverride(d.key, d.maxMarks)
+                                if (e.key === 'Escape') setEditingKey(null)
+                              }}
+                            />
+                            <button onClick={() => saveOverride(d.key, d.maxMarks)} className="text-[#059669]">
+                              <CheckIcon size={14} />
+                            </button>
                           </div>
-                          <button
-                            onClick={() => { setEditingQ(q.questionNo); setEditValue(String(effectiveMark)) }}
-                            className="p-1 rounded-md text-[#94A3B8] hover:text-[#1B3A6B] hover:bg-[#EEF4FF] transition-colors"
-                            title="Override mark"
-                          >
-                            <EditIcon size={13} />
-                          </button>
-                        </div>
-                      )}
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-[#0F172A]">
+                              {effectiveMark(d)}/{d.maxMarks}
+                            </span>
+                            {d.isLow && (
+                              <button
+                                onClick={() => { setEditingKey(d.key); setEditValue(String(effectiveMark(d))) }}
+                                className="text-xs text-[#3B5DE8] font-semibold underline"
+                              >
+                                Edit
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Marks bar */}
-                  <div className="mt-2 h-1 bg-[#E2E8F0] rounded-full overflow-hidden">
-                    <div className="h-full rounded-full transition-all"
-                      style={{
-                        width: `${(effectiveMark / q.maxMarks) * 100}%`,
-                        background: isOverridden ? '#1B3A6B' : q.confidence === 'Low' ? '#D97706' : '#059669'
-                      }}
-                    />
+                    {d.isLow && (
+                      <div className="mt-2 p-2 bg-white rounded border border-[#FECACA]">
+                        <p className="text-[10px] font-semibold text-[#94A3B8] uppercase mb-1">Student Answer</p>
+                        <p className="text-xs text-[#475569] max-h-24 overflow-y-auto whitespace-pre-wrap">
+                          {d.studentAnswer}
+                        </p>
+                      </div>
+                    )}
                   </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {/* Total row */}
-          <div className="mt-4 p-4 rounded-xl bg-[#0F2142] text-white flex items-center justify-between">
-            <div>
-              <div className="text-sm font-semibold">Total Marks</div>
-              <div className="text-xs text-blue-300 mt-0.5">{overrideCount > 0 ? `${overrideCount} mark${overrideCount > 1 ? 's' : ''} overridden by faculty` : 'AI evaluation accepted as-is'}</div>
+                )
+              })}
             </div>
-            <div className="text-right">
-              <div className="text-3xl font-bold">{totalFaculty}<span className="text-lg text-blue-300">/{totalMax}</span></div>
-              <div className="text-xs text-blue-300">{Math.round(totalFaculty / totalMax * 100)}%</div>
-            </div>
-          </div>
-        </div>
-      </div>
+          </Card>
+        )
+      })}
 
       <div className="flex justify-end">
-        <Button variant="primary" size="lg" onClick={onNext} leftIcon={<ChevronRightIcon size={16} />}>
-          Proceed to Faculty Verification
+        <Button variant="primary" size="lg" onClick={onNext}>
+          Proceed to Submission
         </Button>
       </div>
     </div>

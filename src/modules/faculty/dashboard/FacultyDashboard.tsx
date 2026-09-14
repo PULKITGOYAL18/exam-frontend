@@ -1,3 +1,5 @@
+// src/modules/faculty/FacultyDashboard.tsx
+
 import { AppShell } from '@/layouts'
 import { useState } from 'react'
 import { useLogout } from '@/hooks'
@@ -10,7 +12,7 @@ import type { User, Screen } from '@/types'
 import { LogoutModal } from '@/components/common'
 import {
   ClipboardList, CheckCircle, Hourglass, Clock, AlertTriangle, Rocket,
-  Upload, Play, Search, BarChart3
+  Upload, Play, Search, BarChart3, FileText
 } from 'lucide-react'
 
 // ─── Mock Data ────────────────────────────────────────────────────────────────
@@ -30,7 +32,7 @@ function ExamStatusPill({ status }: { status: string }) {
 // ─── Faculty Dashboard ────────────────────────────────────────────────────────
 interface FacultyDashboardProps {
   user: User
-  onNavigate: (s: Screen) => void
+  onNavigate: (s: Screen, data?: any) => void
   onLogout: () => void
 }
 
@@ -42,6 +44,16 @@ export default function FacultyDashboard({ user, onNavigate, onLogout }: Faculty
   const completedSheets = ASSIGNED_EXAMS.reduce((s, e) => s + e.verified, 0)
   const pendingSheets = totalSheets - completedSheets
   const todayProgress = 17
+
+  // ─── Navigation handler for OCR ─────────────────────────────────────────────
+  const goToOCR = (examId?: string, action?: string, examData?: any) => {
+    onNavigate('ocr-workflow', { 
+      examId: examId || '',
+      action: action || 'new',
+      from: 'dashboard',
+      ...examData
+    })
+  }
 
   return (
     <AppShell
@@ -118,25 +130,58 @@ export default function FacultyDashboard({ user, onNavigate, onLogout }: Faculty
           {/* Left 2/3: Exams + Charts */}
           <div className="xl:col-span-2 space-y-6">
 
-            {/* Quick Actions */}
+            {/* ── Quick Actions ─────────────────────────────────────── */}
             <Card>
               <CardHeader title="Quick Actions" subtitle="Jump directly into your evaluation workflow" />
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <QuickAction icon={<Upload size={20} />} label="Upload Sheets" sub="Start new upload" color="#1B3A6B" onClick={() => onNavigate('ocr-workflow')} />
-                <QuickAction icon={<Play size={20} />} label="Continue Evaluation" sub="CS401 — 17 remaining" color="#3B5DE8" onClick={() => onNavigate('ocr-workflow')} />
-                <QuickAction icon={<Search size={20} />} label="Pending Reviews" sub="7 low-confidence" color="#D97706" onClick={() => onNavigate('ocr-workflow')} />
-                <QuickAction icon={<BarChart3 size={20} />} label="Generate Report" sub="Export evaluation data" color="#059669" onClick={() => setReportModal(true)} />
+                <QuickAction 
+                  icon={<Upload size={20} />} 
+                  label="Upload Sheets" 
+                  sub="Start new upload" 
+                  color="#1B3A6B" 
+                  onClick={() => goToOCR(undefined, 'new')} 
+                />
+                <QuickAction 
+                  icon={<Play size={20} />} 
+                  label="Continue Evaluation" 
+                  sub="CS401 — 17 remaining" 
+                  color="#3B5DE8" 
+                  onClick={() => goToOCR('CS401', 'continue')} 
+                />
+                <QuickAction 
+                  icon={<Search size={20} />} 
+                  label="Pending Reviews" 
+                  sub="7 low-confidence" 
+                  color="#D97706" 
+                  onClick={() => goToOCR(undefined, 'review')} 
+                />
+                <QuickAction 
+                  icon={<FileText size={20} />} 
+                  label="Create Answer Key" 
+                  sub="Define questions & rubric" 
+                  color="#7C3AED" 
+                  onClick={() => onNavigate('answer-key-create')} 
+                />
+                <QuickAction 
+                  icon={<BarChart3 size={20} />} 
+                  label="Generate Report" 
+                  sub="Export evaluation data" 
+                  color="#059669" 
+                  onClick={() => setReportModal(true)} 
+                />
               </div>
             </Card>
 
-            {/* Assigned Examinations */}
+            {/* ── Assigned Examinations ─────────────────────────────── */}
             <Card padding={false}>
               <div className="p-5 border-b border-[#E2E8F0] flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-semibold text-[#0F172A]">Assigned Examinations</h3>
                   <p className="text-xs text-[#94A3B8] mt-0.5">This semester · {ASSIGNED_EXAMS.length} examinations</p>
                 </div>
-                <Button variant="secondary" size="sm" onClick={() => onNavigate('ocr-workflow')}>Upload Sheets</Button>
+                <Button variant="secondary" size="sm" onClick={() => goToOCR(undefined, 'new')}>
+                  Upload Sheets
+                </Button>
               </div>
               <div className="divide-y divide-[#F1F5F9]">
                 {ASSIGNED_EXAMS.map(exam => {
@@ -159,9 +204,29 @@ export default function FacultyDashboard({ user, onNavigate, onLogout }: Faculty
                         <div className="flex items-center gap-3 shrink-0">
                           <ProgressRing value={exam.verified} max={exam.total} size={44} color={pct === 100 ? '#059669' : '#1B3A6B'} />
                           {exam.status === 'Pending Upload' || exam.status === 'Scheduled' ? (
-                            <Button variant="primary" size="sm" onClick={() => onNavigate('ocr-workflow')}>Start OCR →</Button>
+                            <Button 
+                              variant="primary" 
+                              size="sm" 
+                              onClick={() => goToOCR(exam.id, 'start', { 
+                                examCode: exam.code, 
+                                examName: exam.name,
+                                totalStudents: exam.total 
+                              })}
+                            >
+                              Start OCR →
+                            </Button>
                           ) : exam.status === 'In Progress' ? (
-                            <Button variant="secondary" size="sm" onClick={() => onNavigate('ocr-workflow')}>Continue →</Button>
+                            <Button 
+                              variant="secondary" 
+                              size="sm" 
+                              onClick={() => goToOCR(exam.id, 'continue', { 
+                                examCode: exam.code, 
+                                examName: exam.name,
+                                totalStudents: exam.total 
+                              })}
+                            >
+                              Continue →
+                            </Button>
                           ) : (
                             <Button variant="ghost" size="sm">View</Button>
                           )}
@@ -195,7 +260,7 @@ export default function FacultyDashboard({ user, onNavigate, onLogout }: Faculty
               </div>
             </Card>
 
-            {/* Charts Row */}
+            {/* ── Charts Row ─────────────────────────────────────────── */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
               <Card>
                 <CardHeader title="Subject Progress" subtitle="Evaluation completion %" />
@@ -212,7 +277,7 @@ export default function FacultyDashboard({ user, onNavigate, onLogout }: Faculty
               </Card>
             </div>
 
-            {/* Evaluation Trend */}
+            {/* ── Evaluation Trend ──────────────────────────────────── */}
             <Card>
               <div className="flex items-center justify-between">
                 <div>
@@ -232,14 +297,14 @@ export default function FacultyDashboard({ user, onNavigate, onLogout }: Faculty
 
           {/* Right 1/3: Notifications + Activity + Calendar */}
           <div className="space-y-6">
-            {/* Notifications */}
+            {/* ── Notifications ──────────────────────────────────────── */}
             <Card>
               <CardHeader title="Notifications" subtitle={`${NOTIFICATIONS.length} updates`}
                 action={<Button variant="ghost" size="sm">Mark all read</Button>} />
               <NotificationList items={NOTIFICATIONS} />
             </Card>
 
-            {/* Calendar */}
+            {/* ── Calendar ───────────────────────────────────────────── */}
             <Card>
               <CardHeader title="Calendar" subtitle="Upcoming deadlines" />
               <MiniCalendar month="January 2026" events={CAL_EVENTS} />
@@ -254,23 +319,10 @@ export default function FacultyDashboard({ user, onNavigate, onLogout }: Faculty
               </div>
             </Card>
 
-            {/* Activity */}
+            {/* ── Activity ───────────────────────────────────────────── */}
             <Card>
               <CardHeader title="Recent Activity" subtitle="Your evaluation timeline" />
               <ActivityTimeline events={ACTIVITY} maxItems={5} />
-            </Card>
-
-            {/* Role Switcher */}
-            <Card className="bg-[#F8FAFC]">
-              <p className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wide mb-2">Prototype — Switch Dashboard</p>
-              <div className="flex flex-wrap gap-1.5">
-                {(['Faculty', 'HOD', 'Dean', 'Admin'] as const).map(r => (
-                  <Button key={r} variant={user.role === r ? 'primary' : 'secondary'} size="sm"
-                    onClick={() => onNavigate(`dashboard-${r.toLowerCase()}` as Screen)}>
-                    {r}
-                  </Button>
-                ))}
-              </div>
             </Card>
           </div>
         </div>
@@ -278,7 +330,7 @@ export default function FacultyDashboard({ user, onNavigate, onLogout }: Faculty
 
       <LogoutModal open={showLogout} onClose={closeLogout} onConfirm={onLogout} />
 
-      {/* Report Modal */}
+      {/* ── Report Modal ─────────────────────────────────────────────── */}
       <Modal open={reportModal} onClose={() => setReportModal(false)}>
         <div className="p-6 space-y-4">
           <h3 className="text-lg font-bold text-[#0F172A]">Generate Evaluation Report</h3>

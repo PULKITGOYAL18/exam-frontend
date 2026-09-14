@@ -287,18 +287,6 @@ export default function DeanDashboard({ user, onNavigate, onLogout }: DeanDashbo
               <CardHeader title="Recent Activity" />
               <ActivityTimeline events={DEAN_ACTIVITY} maxItems={5} />
             </Card>
-
-            <Card className="bg-[#F8FAFC]">
-              <p className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wide mb-2">Prototype — Switch Dashboard</p>
-              <div className="flex flex-wrap gap-1.5">
-                {(['Faculty', 'HOD', 'Dean', 'Admin'] as const).map(r => (
-                  <Button key={r} variant={user.role === r ? 'primary' : 'secondary'} size="sm"
-                    onClick={() => onNavigate(`dashboard-${r.toLowerCase()}` as Screen)}>
-                    {r}
-                  </Button>
-                ))}
-              </div>
-            </Card>
           </div>
         </div>
       </div>
