@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify
+from utils.security import roles_required
 from datetime import datetime, timezone
 from bson import ObjectId
 
@@ -22,12 +23,23 @@ def get_db():
     """
     Get MongoDB database.
 
-    IMPORTANT:
-    Replace this import only if your existing backend
-    uses a different database connection method.
+    Uses the existing database connection
+    from app.py.
     """
     from app import db
     return db
+
+
+# ============================================================
+# NOTIFICATION SENDER ROLES
+# ============================================================
+
+NOTIFICATION_SENDER_ROLES = (
+    "admin",
+    "faculty",
+    "hod",
+    "dean"
+)
 
 
 # ============================================================
@@ -37,40 +49,30 @@ def get_db():
 def serialize_datetime(value):
     """
     Convert MongoDB datetime into UTC ISO-8601 format.
-
-    Example:
-        2026-08-12T11:55:19.586Z
     """
 
     if not value:
         return None
 
     try:
-
-        # MongoDB may return a naive datetime.
-        # Treat naive datetime as UTC.
         if value.tzinfo is None:
             value = value.replace(
                 tzinfo=timezone.utc
             )
 
-        # Convert to UTC
         value = value.astimezone(
             timezone.utc
         )
 
-        # Return ISO format with Z
         return value.isoformat().replace(
             "+00:00",
             "Z"
         )
 
     except Exception as e:
-
         print(
             f"Could not serialize datetime: {e}"
         )
-
         return None
 
 
@@ -80,8 +82,8 @@ def serialize_datetime(value):
 
 def serialize_notification(notification):
     """
-    Convert MongoDB notification document into
-    JSON-safe response.
+    Convert MongoDB notification document
+    into JSON-safe response.
     """
 
     return {
@@ -127,8 +129,219 @@ def serialize_notification(notification):
             notification.get(
                 "read_at"
             )
-        ),
+        )
     }
+
+
+# ============================================================
+# GET USERS FOR NOTIFICATION RECIPIENT SELECTION
+# ============================================================
+
+@notification_bp.route(
+    "/recipients",
+    methods=["GET"]
+)
+@roles_required(
+    "admin",
+    "faculty",
+    "hod",
+    "dean"
+)
+def get_notification_recipients():
+    """
+    Get actual users from MongoDB who can receive notifications.
+
+    Optional role filter:
+
+        GET /api/notifications/recipients
+
+        GET /api/notifications/recipients?role=faculty
+
+        GET /api/notifications/recipients?role=hod
+
+        GET /api/notifications/recipients?role=dean
+
+        GET /api/notifications/recipients?role=admin
+    """
+
+    try:
+
+        db = get_db()
+
+        # ----------------------------------------------------
+        # OPTIONAL ROLE FILTER
+        # ----------------------------------------------------
+
+        role = request.args.get(
+            "role"
+        )
+
+        query = {}
+
+        if role:
+
+            role = str(
+                role
+            ).strip().lower()
+
+            if role not in (
+                "admin",
+                "faculty",
+                "hod",
+                "dean"
+            ):
+                return jsonify({
+                    "success": False,
+                    "message": "Invalid role"
+                }), 400
+
+            query["role"] = role
+
+        # ----------------------------------------------------
+        # GET USERS
+        # ----------------------------------------------------
+
+        users = list(
+            db.users.find(
+                query,
+                {
+                    "_id": 1,
+                    "name": 1,
+                    "full_name": 1,
+                    "first_name": 1,
+                    "last_name": 1,
+                    "email": 1,
+                    "role": 1,
+                    "employeeId": 1,
+                    "department": 1,
+                    "designation": 1,
+                    "status": 1
+                }
+            ).sort(
+                [
+                    ("role", 1),
+                    ("name", 1)
+                ]
+            )
+        )
+
+        # ----------------------------------------------------
+        # SERIALIZE USERS
+        # ----------------------------------------------------
+
+        recipients = []
+
+        for user in users:
+
+            user_role = user.get(
+                "role"
+            )
+
+            if isinstance(
+                user_role,
+                str
+            ):
+                user_role = (
+                    user_role
+                    .strip()
+                    .lower()
+                )
+
+            # ------------------------------------------------
+            # FIND USER DISPLAY NAME
+            # ------------------------------------------------
+
+            name = (
+                user.get("name")
+                or user.get("full_name")
+                or ""
+            )
+
+            if not name:
+
+                first_name = user.get(
+                    "first_name",
+                    ""
+                )
+
+                last_name = user.get(
+                    "last_name",
+                    ""
+                )
+
+                name = (
+                    f"{first_name} "
+                    f"{last_name}"
+                ).strip()
+
+            # ------------------------------------------------
+            # USER RESPONSE
+            # ------------------------------------------------
+
+            recipients.append({
+
+                "id": str(
+                    user["_id"]
+                ),
+
+                "name": name,
+
+                "email": user.get(
+                    "email",
+                    ""
+                ),
+
+                "role": user_role,
+
+                "employeeId": user.get(
+                    "employeeId"
+                ),
+
+                "department": user.get(
+                    "department"
+                ),
+
+                "designation": user.get(
+                    "designation"
+                ),
+
+                "status": user.get(
+                    "status",
+                    "active"
+                )
+            })
+
+        # ----------------------------------------------------
+        # RESPONSE
+        # ----------------------------------------------------
+
+        return jsonify({
+
+            "success": True,
+
+            "count": len(
+                recipients
+            ),
+
+            "recipients": recipients
+
+        }), 200
+
+    except Exception as e:
+
+        print(
+            "Get notification recipients error:",
+            str(e)
+        )
+
+        return jsonify({
+
+            "success": False,
+
+            "message":
+                "Unable to get notification recipients"
+
+        }), 500
 
 
 # ============================================================
@@ -139,35 +352,22 @@ def serialize_notification(notification):
     "/",
     methods=["POST"]
 )
+@roles_required(
+    "admin",
+    "faculty",
+    "hod",
+    "dean"
+)
 def create_notification():
-
     """
     Create notification for ONE specific user.
-
-    Expected JSON:
-
-    {
-        "recipient_id": "USER_ID",
-        "title": "New Exam",
-        "message": "A new examination has been created.",
-        "type": "exam"
-    }
-
-    IMPORTANT:
-
-    The role is NOT taken from the frontend.
-
-    Backend finds the user from MongoDB and automatically
-    stores the user's role in recipient_role.
     """
 
     try:
 
-        # ----------------------------------------------------
-        # REQUEST DATA
-        # ----------------------------------------------------
-
-        data = request.get_json()
+        data = request.get_json(
+            silent=True
+        )
 
         if not data:
 
@@ -223,13 +423,45 @@ def create_notification():
             }), 400
 
         # ----------------------------------------------------
+        # CLEAN DATA
+        # ----------------------------------------------------
+
+        title = str(
+            title
+        ).strip()
+
+        message = str(
+            message
+        ).strip()
+
+        notification_type = str(
+            notification_type
+        ).strip().lower()
+
+        if not title:
+
+            return jsonify({
+                "success": False,
+                "message":
+                    "title cannot be empty"
+            }), 400
+
+        if not message:
+
+            return jsonify({
+                "success": False,
+                "message":
+                    "message cannot be empty"
+            }), 400
+
+        # ----------------------------------------------------
         # DATABASE
         # ----------------------------------------------------
 
         db = get_db()
 
         # ----------------------------------------------------
-        # VALIDATE USER ID
+        # VALIDATE OBJECT ID
         # ----------------------------------------------------
 
         try:
@@ -270,7 +502,7 @@ def create_notification():
             }), 404
 
         # ----------------------------------------------------
-        # GET USER ROLE
+        # GET RECIPIENT ROLE
         # ----------------------------------------------------
 
         recipient_role = recipient.get(
@@ -307,16 +539,14 @@ def create_notification():
                     recipient["_id"]
                 ),
 
-            # IMPORTANT:
-            # Automatically store user's role
             "recipient_role":
                 recipient_role,
 
             "title":
-                title.strip(),
+                title,
 
             "message":
-                message.strip(),
+                message,
 
             "type":
                 notification_type,
@@ -356,18 +586,29 @@ def create_notification():
         )
 
         print(
+            "🔔 SENDER:",
+            request.current_user
+        )
+
+        print(
             "🔔 RECIPIENT ID:",
-            notification["recipient_id"]
+            notification[
+                "recipient_id"
+            ]
         )
 
         print(
             "🔔 RECIPIENT ROLE:",
-            notification["recipient_role"]
+            notification[
+                "recipient_role"
+            ]
         )
 
         print(
             "🔔 TITLE:",
-            notification["title"]
+            notification[
+                "title"
+            ]
         )
 
         print(
@@ -385,8 +626,7 @@ def create_notification():
 
         return jsonify({
 
-            "success":
-                True,
+            "success": True,
 
             "message":
                 "Notification created successfully",
@@ -406,8 +646,7 @@ def create_notification():
 
         return jsonify({
 
-            "success":
-                False,
+            "success": False,
 
             "message":
                 str(e)
@@ -427,17 +666,9 @@ def get_user_notifications(
     user_id
 ):
 
-    """
-    Get notifications belonging to a user.
-    """
-
     try:
 
         db = get_db()
-
-        # ----------------------------------------------------
-        # LIMIT
-        # ----------------------------------------------------
 
         limit = request.args.get(
             "limit",
@@ -451,31 +682,28 @@ def get_user_notifications(
         if limit > 100:
             limit = 100
 
-        # ----------------------------------------------------
-        # QUERY
-        # ----------------------------------------------------
-
         notifications = list(
+
             db.notifications
+
             .find({
                 "recipient_id":
                     str(user_id)
             })
+
             .sort(
                 "created_at",
                 -1
             )
-            .limit(limit)
-        )
 
-        # ----------------------------------------------------
-        # RESPONSE
-        # ----------------------------------------------------
+            .limit(
+                limit
+            )
+        )
 
         return jsonify({
 
-            "success":
-                True,
+            "success": True,
 
             "count":
                 len(notifications),
@@ -501,8 +729,7 @@ def get_user_notifications(
 
         return jsonify({
 
-            "success":
-                False,
+            "success": False,
 
             "message":
                 str(e)
@@ -521,10 +748,6 @@ def get_user_notifications(
 def get_unread_notifications(
     user_id
 ):
-
-    """
-    Get unread notifications for a user.
-    """
 
     try:
 
@@ -548,13 +771,11 @@ def get_unread_notifications(
                 "created_at",
                 -1
             )
-
         )
 
         return jsonify({
 
-            "success":
-                True,
+            "success": True,
 
             "count":
                 len(notifications),
@@ -580,8 +801,7 @@ def get_unread_notifications(
 
         return jsonify({
 
-            "success":
-                False,
+            "success": False,
 
             "message":
                 str(e)
@@ -601,16 +821,14 @@ def get_unread_count(
     user_id
 ):
 
-    """
-    Get unread notification count.
-    """
-
     try:
 
         db = get_db()
 
         count = (
+
             db.notifications
+
             .count_documents({
 
                 "recipient_id":
@@ -620,12 +838,12 @@ def get_unread_count(
                     False
 
             })
+
         )
 
         return jsonify({
 
-            "success":
-                True,
+            "success": True,
 
             "unread_count":
                 count
@@ -640,8 +858,7 @@ def get_unread_count(
 
         return jsonify({
 
-            "success":
-                False,
+            "success": False,
 
             "message":
                 str(e)
@@ -661,17 +878,9 @@ def mark_as_read(
     notification_id
 ):
 
-    """
-    Mark one notification as read.
-    """
-
     try:
 
         db = get_db()
-
-        # ----------------------------------------------------
-        # VALIDATE OBJECT ID
-        # ----------------------------------------------------
 
         try:
 
@@ -683,28 +892,21 @@ def mark_as_read(
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "Invalid notification ID"
 
             }), 400
 
-        # ----------------------------------------------------
-        # READ TIME
-        # ----------------------------------------------------
-
         read_time = datetime.now(
             timezone.utc
         )
 
-        # ----------------------------------------------------
-        # UPDATE
-        # ----------------------------------------------------
-
         result = (
+
             db.notifications
+
             .update_one(
 
                 {
@@ -723,20 +925,14 @@ def mark_as_read(
 
                     }
                 }
-
             )
         )
-
-        # ----------------------------------------------------
-        # NOT FOUND
-        # ----------------------------------------------------
 
         if result.matched_count == 0:
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "Notification not found"
@@ -745,8 +941,7 @@ def mark_as_read(
 
         return jsonify({
 
-            "success":
-                True,
+            "success": True,
 
             "message":
                 "Notification marked as read",
@@ -766,8 +961,7 @@ def mark_as_read(
 
         return jsonify({
 
-            "success":
-                False,
+            "success": False,
 
             "message":
                 str(e)
@@ -787,10 +981,6 @@ def mark_all_as_read(
     user_id
 ):
 
-    """
-    Mark all notifications belonging to a user as read.
-    """
-
     try:
 
         db = get_db()
@@ -800,7 +990,9 @@ def mark_all_as_read(
         )
 
         result = (
+
             db.notifications
+
             .update_many(
 
                 {
@@ -832,8 +1024,7 @@ def mark_all_as_read(
 
         return jsonify({
 
-            "success":
-                True,
+            "success": True,
 
             "message":
                 "All notifications marked as read",
@@ -856,8 +1047,7 @@ def mark_all_as_read(
 
         return jsonify({
 
-            "success":
-                False,
+            "success": False,
 
             "message":
                 str(e)
@@ -877,17 +1067,9 @@ def delete_notification(
     notification_id
 ):
 
-    """
-    Delete a notification.
-    """
-
     try:
 
         db = get_db()
-
-        # ----------------------------------------------------
-        # VALIDATE OBJECT ID
-        # ----------------------------------------------------
 
         try:
 
@@ -899,34 +1081,31 @@ def delete_notification(
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "Invalid notification ID"
 
             }), 400
 
-        # ----------------------------------------------------
-        # DELETE
-        # ----------------------------------------------------
-
         result = (
+
             db.notifications
+
             .delete_one({
 
                 "_id":
                     object_id
 
             })
+
         )
 
         if result.deleted_count == 0:
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "Notification not found"
@@ -935,8 +1114,7 @@ def delete_notification(
 
         return jsonify({
 
-            "success":
-                True,
+            "success": True,
 
             "message":
                 "Notification deleted successfully"
@@ -951,8 +1129,7 @@ def delete_notification(
 
         return jsonify({
 
-            "success":
-                False,
+            "success": False,
 
             "message":
                 str(e)
@@ -961,47 +1138,37 @@ def delete_notification(
 
 
 # ============================================================
-# ADMIN → NOTIFY A ROLE
+# BROADCAST NOTIFICATION TO A ROLE
 # ============================================================
 
 @notification_bp.route(
     "/broadcast-role",
     methods=["POST"]
 )
+@roles_required(
+    "admin",
+    "faculty",
+    "hod",
+    "dean"
+)
 def broadcast_to_role():
-
-    """
-    Send notification to EVERY user having a particular role.
-
-    Expected JSON:
-
-    {
-        "role": "faculty",
-        "title": "Important Announcement",
-        "message": "Faculty meeting tomorrow.",
-        "type": "announcement"
-    }
-    """
 
     try:
 
-        data = request.get_json()
+        data = request.get_json(
+            silent=True
+        )
 
         if not data:
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "Request body is required"
 
             }), 400
-
-        # ----------------------------------------------------
-        # DATA
-        # ----------------------------------------------------
 
         role = data.get(
             "role"
@@ -1020,16 +1187,11 @@ def broadcast_to_role():
             "announcement"
         )
 
-        # ----------------------------------------------------
-        # VALIDATION
-        # ----------------------------------------------------
-
         if not role:
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "role is required"
@@ -1040,8 +1202,7 @@ def broadcast_to_role():
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "title is required"
@@ -1052,36 +1213,63 @@ def broadcast_to_role():
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "message is required"
 
             }), 400
 
-        # ----------------------------------------------------
-        # NORMALIZE ROLE
-        # ----------------------------------------------------
+        role = str(
+            role
+        ).strip().lower()
 
-        role = (
-            str(role)
-            .strip()
-            .lower()
-        )
+        title = str(
+            title
+        ).strip()
 
-        title = title.strip()
-        message = message.strip()
+        message = str(
+            message
+        ).strip()
 
-        # ----------------------------------------------------
-        # DATABASE
-        # ----------------------------------------------------
+        notification_type = str(
+            notification_type
+        ).strip().lower()
+
+        if not role:
+
+            return jsonify({
+
+                "success": False,
+
+                "message":
+                    "role cannot be empty"
+
+            }), 400
+
+        if not title:
+
+            return jsonify({
+
+                "success": False,
+
+                "message":
+                    "title cannot be empty"
+
+            }), 400
+
+        if not message:
+
+            return jsonify({
+
+                "success": False,
+
+                "message":
+                    "message cannot be empty"
+
+            }), 400
 
         db = get_db()
-
-        # ----------------------------------------------------
-        # FIND ALL USERS WITH ROLE
-        # ----------------------------------------------------
 
         users = list(
 
@@ -1105,28 +1293,18 @@ def broadcast_to_role():
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     f"No users found with role: {role}"
 
             }), 404
 
-        # ----------------------------------------------------
-        # ONE UTC TIMESTAMP
-        # ----------------------------------------------------
-
         now = datetime.now(
             timezone.utc
         )
 
         notifications = []
-
-        # ----------------------------------------------------
-        # CREATE ONE NOTIFICATION
-        # FOR EACH USER
-        # ----------------------------------------------------
 
         for user in users:
 
@@ -1172,11 +1350,8 @@ def broadcast_to_role():
 
                 "read_at":
                     None
-            })
 
-        # ----------------------------------------------------
-        # INSERT MANY
-        # ----------------------------------------------------
+            })
 
         if notifications:
 
@@ -1184,16 +1359,17 @@ def broadcast_to_role():
                 notifications
             )
 
-        # ----------------------------------------------------
-        # DEBUG
-        # ----------------------------------------------------
-
         print(
             "========================================"
         )
 
         print(
             "🔔 ROLE BROADCAST"
+        )
+
+        print(
+            "🔔 SENDER:",
+            request.current_user
         )
 
         print(
@@ -1215,14 +1391,9 @@ def broadcast_to_role():
             "========================================"
         )
 
-        # ----------------------------------------------------
-        # RESPONSE
-        # ----------------------------------------------------
-
         return jsonify({
 
-            "success":
-                True,
+            "success": True,
 
             "message":
                 f"Notification sent to {len(notifications)} users",
@@ -1245,8 +1416,7 @@ def broadcast_to_role():
 
         return jsonify({
 
-            "success":
-                False,
+            "success": False,
 
             "message":
                 str(e)
@@ -1255,31 +1425,32 @@ def broadcast_to_role():
 
 
 # ============================================================
-# ADMIN → NOTIFY EVERYONE
+# BROADCAST NOTIFICATION TO EVERYONE
 # ============================================================
 
 @notification_bp.route(
     "/broadcast-all",
     methods=["POST"]
 )
+@roles_required(
+    "admin",
+    "faculty",
+    "hod",
+    "dean"
+)
 def broadcast_to_all():
-
-    """
-    Send notification to EVERY user.
-
-    Each notification stores the user's role.
-    """
 
     try:
 
-        data = request.get_json()
+        data = request.get_json(
+            silent=True
+        )
 
         if not data:
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "Request body is required"
@@ -1299,16 +1470,11 @@ def broadcast_to_all():
             "system"
         )
 
-        # ----------------------------------------------------
-        # VALIDATION
-        # ----------------------------------------------------
-
         if not title:
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "title is required"
@@ -1319,26 +1485,48 @@ def broadcast_to_all():
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "message is required"
 
             }), 400
 
-        title = title.strip()
-        message = message.strip()
+        title = str(
+            title
+        ).strip()
 
-        # ----------------------------------------------------
-        # DATABASE
-        # ----------------------------------------------------
+        message = str(
+            message
+        ).strip()
+
+        notification_type = str(
+            notification_type
+        ).strip().lower()
+
+        if not title:
+
+            return jsonify({
+
+                "success": False,
+
+                "message":
+                    "title cannot be empty"
+
+            }), 400
+
+        if not message:
+
+            return jsonify({
+
+                "success": False,
+
+                "message":
+                    "message cannot be empty"
+
+            }), 400
 
         db = get_db()
-
-        # ----------------------------------------------------
-        # GET USERS
-        # ----------------------------------------------------
 
         users = list(
 
@@ -1359,28 +1547,18 @@ def broadcast_to_all():
 
             return jsonify({
 
-                "success":
-                    False,
+                "success": False,
 
                 "message":
                     "No users found"
 
             }), 404
 
-        # ----------------------------------------------------
-        # UTC TIME
-        # ----------------------------------------------------
-
         now = datetime.now(
             timezone.utc
         )
 
         notifications = []
-
-        # ----------------------------------------------------
-        # CREATE NOTIFICATION
-        # FOR EVERY USER
-        # ----------------------------------------------------
 
         for user in users:
 
@@ -1426,19 +1604,14 @@ def broadcast_to_all():
 
                 "read_at":
                     None
+
             })
 
-        # ----------------------------------------------------
-        # INSERT
-        # ----------------------------------------------------
+        if notifications:
 
-        db.notifications.insert_many(
-            notifications
-        )
-
-        # ----------------------------------------------------
-        # DEBUG
-        # ----------------------------------------------------
+            db.notifications.insert_many(
+                notifications
+            )
 
         print(
             "========================================"
@@ -1446,6 +1619,11 @@ def broadcast_to_all():
 
         print(
             "🔔 GLOBAL BROADCAST"
+        )
+
+        print(
+            "🔔 SENDER:",
+            request.current_user
         )
 
         print(
@@ -1462,14 +1640,9 @@ def broadcast_to_all():
             "========================================"
         )
 
-        # ----------------------------------------------------
-        # RESPONSE
-        # ----------------------------------------------------
-
         return jsonify({
 
-            "success":
-                True,
+            "success": True,
 
             "message":
                 "Notification broadcast successfully",
@@ -1492,8 +1665,7 @@ def broadcast_to_all():
 
         return jsonify({
 
-            "success":
-                False,
+            "success": False,
 
             "message":
                 str(e)
@@ -1508,67 +1680,45 @@ def broadcast_to_all():
 def create_notification_indexes():
 
     """
-    Create MongoDB indexes for faster notification queries.
+    Create MongoDB indexes for faster
+    notification queries.
     """
 
     try:
 
         db = get_db()
 
-        # ----------------------------------------------------
-        # USER + CREATED AT
-        # ----------------------------------------------------
-
         db.notifications.create_index([
-
             (
                 "recipient_id",
                 1
             ),
-
             (
                 "created_at",
                 -1
             )
-
         ])
 
-        # ----------------------------------------------------
-        # USER + READ STATUS
-        # ----------------------------------------------------
-
         db.notifications.create_index([
-
             (
                 "recipient_id",
                 1
             ),
-
             (
                 "is_read",
                 1
             )
-
         ])
 
-        # ----------------------------------------------------
-        # ROLE INDEX
-        # ----------------------------------------------------
-        # Useful if you later need to query notifications
-        # by recipient role.
-
         db.notifications.create_index([
-
             (
                 "recipient_role",
                 1
             ),
-
             (
                 "created_at",
                 -1
             )
-
         ])
 
         print(

@@ -1,505 +1,998 @@
+"""
+Notification Service
+====================
+
+Reusable backend notification service.
+
+Main function:
+
+    send_notify(message, receiver)
+
+Example:
+
+    from services.notification_service import send_notify
+
+    send_notify(
+        message="AI evaluation completed successfully.",
+        receiver=faculty_id
+    )
+
+Optional:
+
+    send_notify(
+        message="5 answer sheets require verification.",
+        receiver=faculty_id,
+        title="Verification Required",
+        notification_type="evaluation"
+    )
+
+This service writes directly to the MongoDB notifications
+collection.
+
+The API routes in notification_routes.py remain responsible
+for frontend/API operations such as fetching notifications,
+marking them as read, deleting them, etc.
+"""
+
 from datetime import datetime, timezone
+from bson import ObjectId
 
 
 # ============================================================
-# Notification Service
+# DATABASE
 # ============================================================
-# This file contains reusable functions for creating
-# notifications.
-#
-# Other backend routes can simply call:
-#
-#     create_notification(...)
-#
-# instead of writing MongoDB notification code repeatedly.
-# ============================================================
-
 
 def get_db():
     """
     Get the existing MongoDB database connection.
 
-    IMPORTANT:
-    This assumes your app.py exposes the database as `db`.
-
-    If your project uses another database connection method,
-    change this function to match your existing setup.
+    The project currently exposes the database through app.db.
     """
+
     from app import db
+
+    if db is None:
+        raise RuntimeError(
+            "Database connection is not available"
+        )
+
     return db
 
 
 # ============================================================
-# CREATE NOTIFICATION FOR ONE USER
+# DATETIME
 # ============================================================
 
-def create_notification(
-    recipient_id,
+def utc_now():
+    """
+    Return the current UTC datetime.
+    """
+
+    return datetime.now(timezone.utc)
+
+
+# ============================================================
+# NORMALIZE RECEIVER
+# ============================================================
+
+def normalize_receiver(receiver):
+    """
+    Convert different receiver formats into a MongoDB
+    user ObjectId.
+
+    Supported:
+
+        ObjectId(...)
+        "6a7dab8c0f532d81b37a0008"
+
+    Returns:
+
+        ObjectId
+
+    Raises:
+
+        ValueError if receiver is invalid.
+    """
+
+    if receiver is None:
+        raise ValueError(
+            "Receiver is required"
+        )
+
+    # Already ObjectId
+    if isinstance(receiver, ObjectId):
+        return receiver
+
+    # Convert to string
+    receiver = str(receiver).strip()
+
+    if not receiver:
+        raise ValueError(
+            "Receiver cannot be empty"
+        )
+
+    try:
+
+        return ObjectId(receiver)
+
+    except Exception:
+
+        raise ValueError(
+            f"Invalid receiver ID: {receiver}"
+        )
+
+
+# ============================================================
+# GET RECEIVER USER
+# ============================================================
+
+def get_receiver_user(receiver):
+    """
+    Find the receiver in MongoDB.
+
+    Returns the complete user document.
+
+    Raises ValueError if the user does not exist.
+    """
+
+    db = get_db()
+
+    receiver_object_id = normalize_receiver(
+        receiver
+    )
+
+    user = db.users.find_one(
+        {
+            "_id": receiver_object_id
+        },
+        {
+            "_id": 1,
+            "name": 1,
+            "email": 1,
+            "role": 1,
+            "department": 1,
+            "designation": 1,
+            "employeeId": 1,
+            "status": 1
+        }
+    )
+
+    if not user:
+
+        raise ValueError(
+            "Receiver user not found"
+        )
+
+    # Optional status check
+    status = str(
+        user.get("status", "active")
+    ).strip().lower()
+
+    if status and status != "active":
+
+        raise ValueError(
+            "Receiver user is inactive"
+        )
+
+    return user
+
+
+# ============================================================
+# CREATE NOTIFICATION DOCUMENT
+# ============================================================
+
+def build_notification(
+    receiver_user,
     title,
     message,
-    notification_type="info",
-    recipient_role=None
+    notification_type="info"
 ):
     """
-    Create a notification for one specific user.
+    Build a notification MongoDB document.
+    """
+
+    user_role = receiver_user.get(
+        "role"
+    )
+
+    if isinstance(
+        user_role,
+        str
+    ):
+
+        user_role = (
+            user_role
+            .strip()
+            .lower()
+        )
+
+    now = utc_now()
+
+    return {
+
+        "recipient_id":
+            str(
+                receiver_user["_id"]
+            ),
+
+        "recipient_role":
+            user_role,
+
+        "title":
+            title,
+
+        "message":
+            message,
+
+        "type":
+            notification_type,
+
+        "is_read":
+            False,
+
+        "created_at":
+            now,
+
+        "read_at":
+            None
+
+    }
+
+
+# ============================================================
+# SEND NOTIFY
+# ============================================================
+
+def send_notify(
+    message,
+    receiver,
+    title="Notification",
+    notification_type="info"
+):
+    """
+    Main reusable notification function.
+
+    ------------------------------------------------------------
+    SIMPLE USAGE
+    ------------------------------------------------------------
+
+    send_notify(
+        message="AI evaluation completed.",
+        receiver=faculty_id
+    )
+
+    ------------------------------------------------------------
+    FULL USAGE
+    ------------------------------------------------------------
+
+    send_notify(
+        message="5 answer sheets require verification.",
+        receiver=faculty_id,
+        title="Verification Required",
+        notification_type="evaluation"
+    )
+
+    ------------------------------------------------------------
+    PARAMETERS
+    ------------------------------------------------------------
+
+    message:
+        Notification message.
+
+    receiver:
+        MongoDB user ID of the person who should receive
+        the notification.
+
+    title:
+        Optional notification title.
+
+    notification_type:
+        Optional type such as:
+
+            info
+            exam
+            evaluation
+            verification
+            answer_key
+            announcement
+            system
+            success
+            warning
+
+    ------------------------------------------------------------
+    RETURNS
+    ------------------------------------------------------------
+
+    Returns a dictionary:
+
+    {
+        "success": True,
+        "notification_id": "...",
+        "recipient_id": "...",
+        "recipient_role": "...",
+        "title": "...",
+        "message": "...",
+        "type": "...",
+        "created_at": "..."
+    }
+
+    Raises:
+        ValueError for invalid input or receiver.
+        RuntimeError for database errors.
+    """
+
+    # --------------------------------------------------------
+    # VALIDATE MESSAGE
+    # --------------------------------------------------------
+
+    if message is None:
+
+        raise ValueError(
+            "Notification message is required"
+        )
+
+    message = str(
+        message
+    ).strip()
+
+    if not message:
+
+        raise ValueError(
+            "Notification message cannot be empty"
+        )
+
+    # --------------------------------------------------------
+    # VALIDATE TITLE
+    # --------------------------------------------------------
+
+    if title is None:
+
+        title = "Notification"
+
+    title = str(
+        title
+    ).strip()
+
+    if not title:
+
+        title = "Notification"
+
+    # --------------------------------------------------------
+    # VALIDATE TYPE
+    # --------------------------------------------------------
+
+    if notification_type is None:
+
+        notification_type = "info"
+
+    notification_type = str(
+        notification_type
+    ).strip()
+
+    if not notification_type:
+
+        notification_type = "info"
+
+    # --------------------------------------------------------
+    # FIND RECEIVER
+    # --------------------------------------------------------
+
+    try:
+
+        receiver_user = get_receiver_user(
+            receiver
+        )
+
+    except ValueError:
+
+        raise
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"Unable to find notification receiver: {e}"
+        )
+
+    # --------------------------------------------------------
+    # BUILD DOCUMENT
+    # --------------------------------------------------------
+
+    notification = build_notification(
+        receiver_user=receiver_user,
+        title=title,
+        message=message,
+        notification_type=notification_type
+    )
+
+    # --------------------------------------------------------
+    # INSERT
+    # --------------------------------------------------------
+
+    try:
+
+        db = get_db()
+
+        result = db.notifications.insert_one(
+            notification
+        )
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"Unable to create notification: {e}"
+        )
+
+    # --------------------------------------------------------
+    # ID
+    # --------------------------------------------------------
+
+    notification_id = str(
+        result.inserted_id
+    )
+
+    # --------------------------------------------------------
+    # DEBUG
+    # --------------------------------------------------------
+
+    print(
+        "========================================"
+    )
+
+    print(
+        "🔔 NOTIFICATION SERVICE"
+    )
+
+    print(
+        "🔔 NOTIFICATION ID:",
+        notification_id
+    )
+
+    print(
+        "🔔 RECIPIENT:",
+        notification[
+            "recipient_id"
+        ]
+    )
+
+    print(
+        "🔔 RECIPIENT ROLE:",
+        notification[
+            "recipient_role"
+        ]
+    )
+
+    print(
+        "🔔 TITLE:",
+        notification[
+            "title"
+        ]
+    )
+
+    print(
+        "🔔 MESSAGE:",
+        notification[
+            "message"
+        ]
+    )
+
+    print(
+        "🔔 TYPE:",
+        notification[
+            "type"
+        ]
+    )
+
+    print(
+        "🔔 CREATED AT:",
+        notification[
+            "created_at"
+        ].isoformat()
+    )
+
+    print(
+        "========================================"
+    )
+
+    # --------------------------------------------------------
+    # RETURN
+    # --------------------------------------------------------
+
+    return {
+
+        "success":
+            True,
+
+        "notification_id":
+            notification_id,
+
+        "recipient_id":
+            notification[
+                "recipient_id"
+            ],
+
+        "recipient_role":
+            notification[
+                "recipient_role"
+            ],
+
+        "title":
+            notification[
+                "title"
+            ],
+
+        "message":
+            notification[
+                "message"
+            ],
+
+        "type":
+            notification[
+                "type"
+            ],
+
+        "created_at":
+            notification[
+                "created_at"
+            ].isoformat()
+
+    }
+
+
+# ============================================================
+# SEND NOTIFY SAFELY
+# ============================================================
+
+def try_send_notify(
+    message,
+    receiver,
+    title="Notification",
+    notification_type="info"
+):
+    """
+    Safe version of send_notify().
+
+    This function DOES NOT raise an exception.
+
+    Useful inside AI pipelines where a notification failure
+    should not stop the main AI/evaluation process.
 
     Example:
 
-        create_notification(
-            recipient_id=str(hod_id),
-            title="Evaluation Submitted",
-            message="A faculty member has submitted an evaluation.",
-            notification_type="evaluation",
-            recipient_role="hod"
+        try_send_notify(
+            message="Evaluation completed.",
+            receiver=faculty_id
         )
 
     Returns:
-        inserted notification ID as string
-        or None if creation fails.
-    """
 
-    try:
-        db = get_db()
-
-        notification = {
-            "recipient_id": str(recipient_id),
-            "recipient_role": recipient_role,
-            "title": title,
-            "message": message,
-            "type": notification_type,
-            "is_read": False,
-            "created_at": datetime.now(timezone.utc)
+        {
+            "success": True,
+            ...
         }
 
-        result = db.notifications.insert_one(notification)
+    OR:
 
-        return str(result.inserted_id)
-
-    except Exception as e:
-        print(f"[NotificationService] Error creating notification: {e}")
-        return None
-
-
-# ============================================================
-# CREATE MULTIPLE NOTIFICATIONS
-# ============================================================
-
-def create_notifications(
-    recipients,
-    title,
-    message,
-    notification_type="info",
-    recipient_role=None
-):
-    """
-    Create the same notification for multiple users.
-
-    `recipients` should be a list of user IDs.
-
-    Example:
-
-        create_notifications(
-            recipients=[faculty1_id, faculty2_id],
-            title="Exam Created",
-            message="A new examination has been created.",
-            notification_type="exam"
-        )
-
-    Returns:
-        Number of notifications created.
+        {
+            "success": False,
+            "message": "..."
+        }
     """
 
     try:
-        db = get_db()
 
-        now = datetime.now(timezone.utc)
+        return send_notify(
+            message=message,
+            receiver=receiver,
+            title=title,
+            notification_type=notification_type
+        )
 
-        notifications = []
+    except Exception as e:
 
-        for recipient_id in recipients:
+        print(
+            "⚠️ Notification failed:",
+            str(e)
+        )
 
-            notifications.append({
-                "recipient_id": str(recipient_id),
-                "recipient_role": recipient_role,
-                "title": title,
-                "message": message,
-                "type": notification_type,
-                "is_read": False,
-                "created_at": now
+        return {
+
+            "success":
+                False,
+
+            "message":
+                str(e)
+
+        }
+
+
+# ============================================================
+# SEND NOTIFY TO ROLE
+# ============================================================
+
+def send_notify_to_role(
+    message,
+    role,
+    title="Notification",
+    notification_type="info"
+):
+    """
+    Send the same notification to every user
+    having the specified role.
+
+    Example:
+
+        send_notify_to_role(
+            message="New exam has been created.",
+            role="faculty",
+            title="New Exam",
+            notification_type="exam"
+        )
+    """
+
+    if not message:
+
+        raise ValueError(
+            "Notification message is required"
+        )
+
+    role = str(
+        role
+    ).strip().lower()
+
+    if not role:
+
+        raise ValueError(
+            "Role is required"
+        )
+
+    db = get_db()
+
+    users = list(
+        db.users.find(
+            {
+                "role": role,
+                "status": "active"
+            },
+            {
+                "_id": 1,
+                "role": 1
+            }
+        )
+    )
+
+    results = []
+
+    for user in users:
+
+        try:
+
+            result = send_notify(
+                message=message,
+                receiver=str(
+                    user["_id"]
+                ),
+                title=title,
+                notification_type=notification_type
+            )
+
+            results.append(result)
+
+        except Exception as e:
+
+            results.append({
+
+                "success":
+                    False,
+
+                "recipient_id":
+                    str(
+                        user["_id"]
+                    ),
+
+                "message":
+                    str(e)
+
             })
 
-        if not notifications:
-            return 0
+    return {
 
-        result = db.notifications.insert_many(notifications)
+        "success":
+            True,
 
-        return len(result.inserted_ids)
+        "role":
+            role,
 
-    except Exception as e:
-        print(
-            f"[NotificationService] Error creating notifications: {e}"
-        )
-        return 0
+        "recipient_count":
+            len(users),
+
+        "sent_count":
+            len([
+                result
+                for result
+                in results
+                if result.get(
+                    "success"
+                )
+            ]),
+
+        "results":
+            results
+
+    }
 
 
 # ============================================================
-# NOTIFY USERS BY ROLE
+# SEND NOTIFY TO EVERYONE
 # ============================================================
 
-def notify_role(
-    role,
-    title,
+def send_notify_to_all(
     message,
-    notification_type="announcement"
-):
-    """
-    Send a notification to every user having a particular role.
-
-    Example:
-
-        notify_role(
-            role="faculty",
-            title="New Examination",
-            message="A new examination has been created.",
-            notification_type="exam"
-        )
-
-    Returns:
-        Number of users notified.
-    """
-
-    try:
-        db = get_db()
-
-        users = list(
-            db.users.find(
-                {"role": role},
-                {"_id": 1}
-            )
-        )
-
-        if not users:
-            return 0
-
-        recipient_ids = [
-            str(user["_id"])
-            for user in users
-        ]
-
-        return create_notifications(
-            recipients=recipient_ids,
-            title=title,
-            message=message,
-            notification_type=notification_type,
-            recipient_role=role
-        )
-
-    except Exception as e:
-        print(
-            f"[NotificationService] Error notifying role '{role}': {e}"
-        )
-        return 0
-
-
-# ============================================================
-# NOTIFY ALL USERS
-# ============================================================
-
-def notify_all(
-    title,
-    message,
+    title="Notification",
     notification_type="system"
 ):
     """
-    Send a notification to every user in the system.
+    Send notification to every active user.
 
     Example:
 
-        notify_all(
+        send_notify_to_all(
+            message="System maintenance tonight.",
             title="System Maintenance",
-            message="The system will be unavailable tonight.",
             notification_type="system"
         )
-
-    Returns:
-        Number of users notified.
     """
 
-    try:
-        db = get_db()
+    if not message:
 
-        users = list(
-            db.users.find(
-                {},
-                {
-                    "_id": 1,
-                    "role": 1
-                }
-            )
+        raise ValueError(
+            "Notification message is required"
         )
 
-        if not users:
-            return 0
+    db = get_db()
 
-        now = datetime.now(timezone.utc)
+    users = list(
+        db.users.find(
+            {
+                "status": "active"
+            },
+            {
+                "_id": 1,
+                "role": 1
+            }
+        )
+    )
 
-        notifications = []
+    results = []
 
-        for user in users:
+    for user in users:
 
-            notifications.append({
-                "recipient_id": str(user["_id"]),
-                "recipient_role": user.get("role"),
-                "title": title,
-                "message": message,
-                "type": notification_type,
-                "is_read": False,
-                "created_at": now
+        try:
+
+            result = send_notify(
+                message=message,
+                receiver=str(
+                    user["_id"]
+                ),
+                title=title,
+                notification_type=notification_type
+            )
+
+            results.append(result)
+
+        except Exception as e:
+
+            results.append({
+
+                "success":
+                    False,
+
+                "recipient_id":
+                    str(
+                        user["_id"]
+                    ),
+
+                "message":
+                    str(e)
+
             })
 
-        if not notifications:
-            return 0
+    return {
 
-        result = db.notifications.insert_many(notifications)
+        "success":
+            True,
 
-        return len(result.inserted_ids)
+        "recipient_count":
+            len(users),
 
-    except Exception as e:
-        print(
-            f"[NotificationService] Error broadcasting notification: {e}"
-        )
-        return 0
+        "sent_count":
+            len([
+                result
+                for result
+                in results
+                if result.get(
+                    "success"
+                )
+            ]),
+
+        "results":
+            results
+
+    }
 
 
 # ============================================================
-# EXAM / EVALUATION NOTIFICATIONS
+# CONVENIENCE FUNCTIONS
 # ============================================================
 
 def notify_exam_created(
-    recipient_id,
+    receiver,
     exam_name
 ):
     """
     Notify a user that an exam has been created.
     """
 
-    return create_notification(
-        recipient_id=recipient_id,
-        title="New Exam Created",
-        message=f"A new examination '{exam_name}' has been created.",
+    return send_notify(
+
+        message=(
+            f"Exam '{exam_name}' has been created "
+            "successfully."
+        ),
+
+        receiver=receiver,
+
+        title="New Exam",
+
         notification_type="exam"
-    )
 
-
-def notify_sheets_uploaded(
-    recipient_id,
-    exam_name
-):
-    """
-    Notify a user that answer sheets have been uploaded.
-    """
-
-    return create_notification(
-        recipient_id=recipient_id,
-        title="Sheets Uploaded",
-        message=f"Answer sheets for '{exam_name}' have been uploaded.",
-        notification_type="upload"
     )
 
 
 def notify_evaluation_completed(
-    recipient_id,
+    receiver,
     exam_name
 ):
     """
     Notify a user that AI evaluation has completed.
     """
 
-    return create_notification(
-        recipient_id=recipient_id,
-        title="Evaluation Completed",
+    return send_notify(
+
         message=(
-            f"AI evaluation for '{exam_name}' has been completed "
-            "and is ready for verification."
+            f"AI evaluation for '{exam_name}' "
+            "has been completed successfully."
         ),
+
+        receiver=receiver,
+
+        title="Evaluation Completed",
+
         notification_type="evaluation"
+
     )
 
 
 def notify_verification_required(
-    recipient_id,
-    exam_name
+    receiver,
+    pending_count
 ):
     """
-    Notify a faculty member that verification is required.
+    Notify a faculty member that answers require
+    manual verification.
     """
 
-    return create_notification(
-        recipient_id=recipient_id,
+    return send_notify(
+
+        message=(
+            f"{pending_count} answer sheet(s) "
+            "require manual verification."
+        ),
+
+        receiver=receiver,
+
         title="Verification Required",
-        message=(
-            f"Some answers in '{exam_name}' require "
-            "your verification."
-        ),
+
         notification_type="verification"
+
     )
 
 
-def notify_evaluation_submitted_to_hod(
-    hod_id,
-    exam_name
+def notify_answer_key_created(
+    receiver,
+    subject
 ):
     """
-    Notify HOD that faculty has submitted evaluation.
+    Notify a user that an answer key has been created.
     """
 
-    return create_notification(
-        recipient_id=hod_id,
-        title="Evaluation Awaiting Review",
+    return send_notify(
+
         message=(
-            f"Evaluation for '{exam_name}' has been submitted "
-            "and is awaiting HOD review."
+            f"Answer key for '{subject}' "
+            "has been created successfully."
         ),
-        notification_type="hod_review",
-        recipient_role="hod"
-    )
 
+        receiver=receiver,
 
-def notify_hod_approved(
-    dean_id,
-    exam_name
-):
-    """
-    Notify Dean that HOD has approved an evaluation.
-    """
+        title="Answer Key Created",
 
-    return create_notification(
-        recipient_id=dean_id,
-        title="Evaluation Awaiting Dean Approval",
-        message=(
-            f"Evaluation for '{exam_name}' has been approved "
-            "by the HOD and is awaiting Dean approval."
-        ),
-        notification_type="dean_review",
-        recipient_role="dean"
-    )
+        notification_type="answer_key"
 
-
-def notify_result_finalized(
-    recipient_id,
-    exam_name
-):
-    """
-    Notify user that the result has been finalized.
-    """
-
-    return create_notification(
-        recipient_id=recipient_id,
-        title="Result Finalized",
-        message=(
-            f"The result for '{exam_name}' has been finalized."
-        ),
-        notification_type="result"
     )
 
 
 # ============================================================
-# USER / ADMIN NOTIFICATIONS
+# CREATE INDEXES
 # ============================================================
 
-def notify_user_created(
-    user_id,
-    role
-):
+def create_notification_indexes():
     """
-    Notify a newly created user.
-    """
+    Create indexes used by the notification system.
 
-    return create_notification(
-        recipient_id=user_id,
-        title="Account Created",
-        message=(
-            f"Your account has been created successfully "
-            f"with role '{role}'."
-        ),
-        notification_type="account"
-    )
-
-
-def notify_user_activated(
-    user_id
-):
-    """
-    Notify a user that their account has been activated.
+    Safe to call multiple times because MongoDB will not
+    recreate an identical existing index.
     """
 
-    return create_notification(
-        recipient_id=user_id,
-        title="Account Activated",
-        message=(
-            "Your account has been activated. "
-            "You can now access the examination system."
-        ),
-        notification_type="account"
-    )
+    try:
 
+        db = get_db()
 
-def notify_user_deactivated(
-    user_id
-):
-    """
-    Notify a user that their account has been deactivated.
-    """
+        # ----------------------------------------------------
+        # USER + CREATED AT
+        # ----------------------------------------------------
 
-    return create_notification(
-        recipient_id=user_id,
-        title="Account Deactivated",
-        message=(
-            "Your account has been deactivated. "
-            "Please contact the administrator if you need assistance."
-        ),
-        notification_type="account"
-    )
+        db.notifications.create_index([
+            (
+                "recipient_id",
+                1
+            ),
+            (
+                "created_at",
+                -1
+            )
+        ])
 
+        # ----------------------------------------------------
+        # USER + READ STATUS
+        # ----------------------------------------------------
 
-# ============================================================
-# ADMIN ANNOUNCEMENT
-# ============================================================
+        db.notifications.create_index([
+            (
+                "recipient_id",
+                1
+            ),
+            (
+                "is_read",
+                1
+            )
+        ])
 
-def send_announcement(
-    title,
-    message,
-    role=None
-):
-    """
-    Send an announcement.
+        # ----------------------------------------------------
+        # ROLE + CREATED AT
+        # ----------------------------------------------------
 
-    If role is provided:
-        notification goes only to that role.
+        db.notifications.create_index([
+            (
+                "recipient_role",
+                1
+            ),
+            (
+                "created_at",
+                -1
+            )
+        ])
 
-    If role is None:
-        notification goes to everyone.
-
-    Example:
-
-        send_announcement(
-            title="Holiday Announcement",
-            message="University will remain closed tomorrow.",
-            role="faculty"
-        )
-    """
-
-    if role:
-
-        return notify_role(
-            role=role,
-            title=title,
-            message=message,
-            notification_type="announcement"
+        print(
+            "✅ Notification indexes created successfully."
         )
 
-    return notify_all(
-        title=title,
-        message=message,
-        notification_type="announcement"
-    )
+        return True
+
+    except Exception as e:
+
+        print(
+            "⚠️ Could not create notification indexes:",
+            str(e)
+        )
+
+        return False

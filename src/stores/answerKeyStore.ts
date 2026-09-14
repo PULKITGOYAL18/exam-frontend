@@ -1,7 +1,13 @@
 // src/stores/answerKeyStore.ts
 
 import { create } from 'zustand'
-import { AnswerKey, AnswerKeyListItem } from '@/types'
+
+import type {
+  AnswerKey,
+  AnswerKeyListItem,
+  AnswerKeyCreateData,
+} from '@/types'
+
 import { answerKeyService } from '@/services/api/answerKeyService'
 
 // Extended type to support sections structure
@@ -40,11 +46,19 @@ interface AnswerKeyWithSections extends AnswerKey {
 }
 
 interface AnswerKeyStore {
+
+  // ─── State ────────────────────────────────────────────────
+
   answerKeys: AnswerKeyListItem[]
   currentAnswerKey: AnswerKeyWithSections | null
   isLoading: boolean
+
   error: string | null
+
   selectedKeyId: string | null
+
+
+  // ─── Authenticated operations ─────────────────────────────
 
   fetchAll: () => Promise<void>
   fetchById: (id: string) => Promise<AnswerKeyWithSections | null>
@@ -53,7 +67,10 @@ interface AnswerKeyStore {
   delete: (id: string) => Promise<void>
   selectForEvaluation: (id: string) => void
   reset: () => void
-  getAnswerKeyContent: (id: string) => Promise<string>
+
+  getAnswerKeyContent: (
+    id: string
+  ) => Promise<string>
 }
 
 export const useAnswerKeyStore = create<AnswerKeyStore>((set, get) => ({
@@ -107,6 +124,7 @@ export const useAnswerKeyStore = create<AnswerKeyStore>((set, get) => ({
       if (!key) {
         throw new Error('Answer key not found')
       }
+    },
 
       // Build structured JSON with sections support
       const jsonData: any = {

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useAnswerKeyStore } from '@/stores/answerKeyStore'
 import StepCreateAnswerKey from './create/StepCreateAnswerKey'
 
+
 interface AnswerKeyManagerProps {
   user: any
   onNavigate: (screen: any) => void
@@ -214,6 +215,10 @@ export default function AnswerKeyManager({
             >
               Create Another
             </button>
+
+
+            {/* LIST TAB */}
+
             <button
               type="button"
               onClick={goDashboard}
@@ -221,6 +226,7 @@ export default function AnswerKeyManager({
             >
               ← Back to Faculty Dashboard
             </button>
+
           </div>
         </div>
       </div>

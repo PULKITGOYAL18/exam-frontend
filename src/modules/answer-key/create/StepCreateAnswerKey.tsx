@@ -157,6 +157,45 @@ const RUBRIC_TEMPLATES: Record<
         description: 'Correct final answer'
       }
     ]
+  }
+}
+
+function scaleRubricToMarks(criteria: { name: string; marks: number; description: string }[], maxMarks: number): RubricItem[] {
+  if (!criteria.length || maxMarks <= 0) return []
+  const sourceTotal = criteria.reduce((sum, item) => sum + Number(item.marks || 0), 0)
+  if (sourceTotal <= 0) {
+    return criteria.map((item, index) => ({
+      id: id(`rubric-template-${index}`),
+      name: item.name,
+      marks: index === criteria.length - 1 ? maxMarks : 0,
+      description: item.description,
+      required: true
+    }))
+  }
+  const exact = criteria.map(item => (item.marks / sourceTotal) * maxMarks)
+  const values = exact.map(Math.floor)
+  let allocated = values.reduce((sum, value) => sum + value, 0)
+  const order = exact.map((value, index) => ({ index, remainder: value - values[index] })).sort((a, b) => b.remainder - a.remainder)
+  let cursor = 0
+  while (allocated < maxMarks && order.length) {
+    values[order[cursor % order.length].index] += 1
+    allocated += 1
+    cursor += 1
+  }
+  return criteria.map((item, index) => ({
+    id: id(`rubric-template-${index}`),
+    name: item.name,
+    marks: values[index],
+    description: item.description,
+    required: true
+  }))
+}
+
+const STRICTNESS_INFO: Record<MarkingStrictness, { title: string; text: string; threshold: number }> = {
+  easy: {
+    title: 'Easy / Lenient',
+    text: 'Around 30% meaningful coverage can receive high partial credit, depending on rubric and correctness.',
+    threshold: 30
   },
 
   'short-answer': {
@@ -195,6 +234,11 @@ const RUBRIC_TEMPLATES: Record<
       }
     ]
   }
+  return [
+    makeSection('Section A: Objective / Short Objective', 'MCQ, True/False, One Word, Fill Blank and One Line', 'A'),
+    makeSection('Section B: Descriptive / Long Answer', 'Long-answer questions with flexible marking', 'B'),
+    makeSection('Section C: Short Answer', 'Short answers and questions with sub-parts', 'C')
+  ]
 }
 
 // ─── Common Keywords ──────────────────────────────────────────────────────────
@@ -730,6 +774,27 @@ export default function StepCreateAnswerKey({
       ...prev,
       [questionId]: !prev[questionId]
     }))
+
+    const questions = serializedSections.flatMap(section => section.questions)
+    return {
+      name: name.trim(),
+      subject: subject.trim(),
+      subject_code: subjectCode.trim(),
+      college_name: collegeName.trim(),
+      department: department.trim(),
+      semester: Number(semester),
+      examination_type: examinationType,
+      academic_year: academicYear.trim(),
+      examination_date: examinationDate,
+      duration: duration.trim(),
+      total_marks: calculatedMarks,
+      declared_total_marks: Number(declaredTotalMarks),
+      total_questions: questions.length,
+      questions,
+      sections: serializedSections,
+      created_by: 'faculty',
+      creation_mode: 'faculty'
+    }
   }
 
   // ─── Sub-Part Functions ────────────────────────────────────────────────────
@@ -889,6 +954,9 @@ export default function StepCreateAnswerKey({
     if (!question) {
       return
     }
+    setStep('review')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
     const newRubric: RubricCriterionForm = {
       name: '',
@@ -3186,4 +3254,8 @@ export default function StepCreateAnswerKey({
       </div>
     </div>
   )
+}
+
+function Stat({ label, value }: { label: string; value: any }) {
+  return <div><div className="text-xs uppercase tracking-wide font-semibold text-slate-400">{label}</div><div className="mt-1 text-sm font-semibold text-slate-900 break-words">{value || '—'}</div></div>
 }
