@@ -963,3 +963,50 @@ export interface AnswerKeyListItem {
 
   created_at: string
 }
+
+export interface SubPart {
+  id: string
+  question_text: string
+  model_answer: string
+  max_marks: number
+  question_type: 'theory' | 'numerical' | 'diagram' | 'mixed'
+  diagram_required: boolean
+  diagram_weightage: number
+  key_points: string[]
+  keywords: string[]
+  rubric: RubricCriterion[]
+}
+
+export interface QuestionWithSubParts {
+  id: string
+  question_number: string
+  question_text: string
+  model_answer: string
+  max_marks: number
+  question_type: 'theory' | 'numerical' | 'diagram' | 'mixed'
+  diagram_required: boolean
+  diagram_weightage: number
+  key_points: string[]
+  keywords: string[]
+  rubric: RubricCriterion[]
+  sub_parts: SubPart[]
+}
+
+export interface Section {
+  id: string
+  name: string
+  description: string
+  instruction: string
+  questions: QuestionWithSubParts[]
+}
+
+export interface AnswerKeyWithSections extends AnswerKey {
+  sections: Section[]
+}
+
+export interface RubricCriterion {
+  name: string
+  marks: number
+  description: string
+  required: boolean
+}

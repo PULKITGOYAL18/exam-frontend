@@ -87,66 +87,15 @@ export const answerKeyService = {
   ): Promise<AnswerKey> => {
 
     try {
-
+      // Transform data if needed for backend compatibility
+      const payload = preparePayload(data)
+      
+      console.log('🚀 Service sending payload:', JSON.stringify(payload, null, 2)) // Debug log
+      
       const response = await axios.post(
         `${API_URL}/answer-key/create`,
-        data,
-        getAuthConfig()
-      )
-
-      return response.data.data
-
-    } catch (error: any) {
-
-      console.error(
-        '❌ Authenticated create answer key error:',
-        error.response?.data ||
-        error.message
-      )
-
-      throw error
-    }
-  },
-
-
-  // ==========================================================
-  // PUBLIC CREATE
-  // ==========================================================
-  //
-  // POST:
-  // /api/answer-key/public-create
-  //
-  // IMPORTANT:
-  // No login required.
-  // No JWT required.
-  //
-  // This MUST be used by the public Answer Key Manager.
-  // ==========================================================
-
-  createPublic: async (
-    data: AnswerKeyCreateData
-  ): Promise<AnswerKey> => {
-
-    try {
-
-      console.log(
-        '🌐 Sending PUBLIC answer-key creation request...'
-      )
-
-      console.log(
-        '🌐 Endpoint:',
-        `${API_URL}/answer-key/public-create`
-      )
-
-      const response = await axios.post(
-        `${API_URL}/answer-key/public-create`,
-        data,
-        getPublicConfig()
-      )
-
-      console.log(
-        '✅ Public answer key created:',
-        response.data
+        payload,
+        getAuthHeader()
       )
 
       return response.data.data
@@ -163,26 +112,11 @@ export const answerKeyService = {
     }
   },
 
-
-  // ==========================================================
-  // AUTHENTICATED LIST
-  // ==========================================================
-  //
-  // GET:
-  // /api/answer-key/list
-  //
-  // Requires JWT.
-  // ==========================================================
-
+  // ... rest of the service methods remain the same ...
   list: async (): Promise<AnswerKeyListItem[]> => {
 
     try {
-
-      const response = await axios.get(
-        `${API_URL}/answer-key/list`,
-        getAuthConfig()
-      )
-
+      const response = await axios.get(`${API_URL}/answer-key/list`, getAuthHeader())
       return response.data.data
 
     } catch (error: any) {
@@ -213,18 +147,7 @@ export const answerKeyService = {
   ): Promise<AnswerKey> => {
 
     try {
-
-      if (!id) {
-        throw new Error(
-          'Answer key ID is required.'
-        )
-      }
-
-      const response = await axios.get(
-        `${API_URL}/answer-key/${encodeURIComponent(id)}`,
-        getAuthConfig()
-      )
-
+      const response = await axios.get(`${API_URL}/answer-key/${id}`, getAuthHeader())
       return response.data.data
 
     } catch (error: any) {
@@ -256,19 +179,8 @@ export const answerKeyService = {
   ): Promise<AnswerKey> => {
 
     try {
-
-      if (!id) {
-        throw new Error(
-          'Answer key ID is required.'
-        )
-      }
-
-      const response = await axios.put(
-        `${API_URL}/answer-key/${encodeURIComponent(id)}`,
-        data,
-        getAuthConfig()
-      )
-
+      const payload = preparePayload(data)
+      const response = await axios.put(`${API_URL}/answer-key/${id}`, payload, getAuthHeader())
       return response.data.data
 
     } catch (error: any) {
@@ -299,18 +211,7 @@ export const answerKeyService = {
   ): Promise<void> => {
 
     try {
-
-      if (!id) {
-        throw new Error(
-          'Answer key ID is required.'
-        )
-      }
-
-      await axios.delete(
-        `${API_URL}/answer-key/${encodeURIComponent(id)}`,
-        getAuthConfig()
-      )
-
+      await axios.delete(`${API_URL}/answer-key/${id}`, getAuthHeader())
     } catch (error: any) {
 
       console.error(
@@ -339,18 +240,7 @@ export const answerKeyService = {
   ): Promise<AnswerKeyListItem[]> => {
 
     try {
-
-      if (!subject) {
-        throw new Error(
-          'Subject is required.'
-        )
-      }
-
-      const response = await axios.get(
-        `${API_URL}/answer-key/subject/${encodeURIComponent(subject)}`,
-        getAuthConfig()
-      )
-
+      const response = await axios.get(`${API_URL}/answer-key/subject/${subject}`, getAuthHeader())
       return response.data.data
 
     } catch (error: any) {
@@ -608,4 +498,76 @@ export const answerKeyService = {
     }
   },
 
+  getBySection: async (sectionId: string): Promise<AnswerKey> => {
+    try {
+      const response = await axios.get(`${API_URL}/answer-key/section/${sectionId}`, getAuthHeader())
+      return response.data.data
+    } catch (error: any) {
+      console.error('❌ Get by section error:', error.response?.data || error.message)
+      throw error
+    }
+  }
+}
+
+// Helper to prepare payload for backend
+function preparePayload(data: any): any {
+  // CASE 1: Data already has flattened 'questions' array (from StepCreateAnswerKey)
+  // If your backend expects flat questions, return it as-is (with minor cleanup)
+  if (data.questions && Array.isArray(data.questions) && !data.sections) {
+    return {
+      name: data.name,
+      subject: data.subject,
+      department: data.department,
+      semester: data.semester,
+      total_marks: data.total_marks,
+      total_questions: data.total_questions,
+      questions: data.questions, // Keep it flat!
+      created_by: data.created_by || 'faculty'
+    }
+  }
+
+  // CASE 2: Data has 'sections' (Nested structure)
+  // Only use this if your backend specifically expects nested sections
+  if (data.sections && data.sections.length > 0) {
+    return {
+      name: data.name,
+      subject: data.subject,
+      department: data.department,
+      semester: data.semester,
+      total_marks: data.total_marks,
+      total_questions: data.total_questions,
+      sections: data.sections.map((section: any) => ({
+        name: section.name,
+        description: section.description || '',
+        instruction: section.instruction || '',
+        questions: section.questions.map((q: any) => ({
+          question_number: q.question_number,
+          question_text: q.question_text,
+          model_answer: q.model_answer,
+          max_marks: q.max_marks,
+          question_type: q.question_type,
+          diagram_required: q.diagram_required || false,
+          diagram_weightage: q.diagram_weightage || 0,
+          key_points: q.key_points || [],
+          keywords: q.keywords || [],
+          rubric: q.rubric || [],
+          sub_parts: q.sub_parts?.map((sp: any) => ({
+            question_text: sp.question_text,
+            model_answer: sp.model_answer,
+            max_marks: sp.max_marks,
+            question_type: sp.question_type,
+            diagram_required: sp.diagram_required || false,
+            diagram_weightage: sp.diagram_weightage || 0,
+            key_points: sp.key_points || [],
+            keywords: sp.keywords || [],
+            rubric: sp.rubric || [],
+          })) || []
+        }))
+      })),
+      created_by: data.created_by || 'faculty'
+    }
+  }
+  
+  // Fallback
+  return data
 }
