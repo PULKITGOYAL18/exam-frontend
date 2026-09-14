@@ -9,10 +9,7 @@ npm run dev
 
 
 ## How to run backend
-venv\Scripts\Activate.ps1
-cd /backend
-python app.py
-
+co
 
 
 <!-- helper for getting all file code in a folder -->
